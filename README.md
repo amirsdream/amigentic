@@ -1,218 +1,278 @@
-# LangChain Agentic App (Production-Grade)
+# LangChain Meta-Agent System
 
-A production-ready LangChain application with an **agentic workflow** using a **local LLM (Ollama)** and complete observability via **Arize Phoenix**.
+An advanced **meta-orchestration system** that dynamically creates hierarchical multi-agent workflows based on query complexity. Built with LangChain, Ollama (local LLM), and Arize Phoenix observability.
 
-## Features
+## 🌟 Key Features
 
-- 🧠 **Autonomous Agent Design**: AI designs custom multi-agent topology for each question
-- 🤖 **Local LLM**: Uses Ollama with Llama 3.1 (no external API calls)
-- 🔍 **Web Search**: DuckDuckGo integration for real-time information
-- 🏗️ **Dynamic Topology**: Different agent workflows per query type
-- � **Adaptive Complexity**: Automatically scales depth and agent count based on query complexity
-- 🔀 **Hierarchical Delegation**: Agents can delegate to specialized sub-agents (up to 5 levels deep)
-- �💾 **Conversation Memory**: Persistent context across interactions
-- 📊 **Observability**: Full tracing with Arize Phoenix (local, no cloud)
-- 🎨 **Execution Visualization**: Terminal trees + interactive HTML graphs (PyVis)
-- 📝 **Logging**: Comprehensive logging to file and console
-- ⚙️ **Configuration**: Environment-based configuration
-- 🛡️ **Error Handling**: Robust error handling and validation
+### Intelligent Orchestration
+- **🎯 Adaptive Complexity Analysis**: Automatically analyzes query complexity (score-based system)
+- **📊 Dynamic Scaling**: Scales from 1 agent (simple) to 12+ agents (complex projects)
+- **🔀 Hierarchical Delegation**: Up to 5 levels of agent nesting with recursive task delegation
+- **🧠 Meta-Coordination**: AI coordinator decides optimal agent topology per query
 
-## Prerequisites
+### Agent Capabilities
+- **8 Specialized Roles**: Researcher, Analyzer, Planner, Writer, Coder, Critic, Synthesizer, Coordinator
+- **🔧 Tool Integration**: DuckDuckGo web search for real-time information
+- **🎨 Role-Based Delegation**: Planner and Coordinator roles can spawn sub-agents
+- **💾 Conversation Memory**: Maintains context across multi-turn conversations
 
-1.  **Ollama**: Download and install from [ollama.com](https://ollama.com)
-2.  **Python 3.8+**: Ensure Python is installed
+### Visualization & Monitoring
+- **🌳 Terminal Trees**: Rich console output showing execution hierarchy
+- **🌐 Interactive Graphs**: PyVis-based HTML graphs with hover details
+- **📈 Phoenix Tracing**: Real-time observability with unique trace names per agent
+- **📊 Complexity Insights**: Detailed logging of complexity analysis and decisions
 
-## Setup
+### Technical Stack
+- **🤖 Local LLM**: Ollama (llama3.2:1b) - 100% local, no API calls
+- **🔍 Web Search**: DuckDuckGo Search integration
+- **📊 Observability**: Arize Phoenix with OpenTelemetry instrumentation
+- **🎨 Visualization**: Rich (terminal) + PyVis (interactive graphs)
 
-1.  **Install Ollama and pull the model**:
-    ```bash
-    ollama pull llama3.1
-    ```
+## 🏗️ Architecture
 
-2.  **Install Dependencies**:
-    ```bash
-    pip install langchain langchain-ollama langchain-community duckduckgo-search ddgs python-dotenv arize-phoenix openinference-instrumentation-langchain
-    ```
+### Complexity-Based Execution
 
-3.  **Configure** (optional):
-    Edit `.env` to customize settings:
-    - `OLLAMA_MODEL`: Model name (default: llama3.1)
-    - `OLLAMA_TEMPERATURE`: Model temperature (default: 0)
-    - `PHOENIX_PORT`: Phoenix UI port (default: 6006)
-    - `MAX_INPUT_LENGTH`: Maximum input length (default: 1000)
-    - `SYSTEM_PROMPT`: Custom system prompt
+The system analyzes each query and assigns a complexity score based on:
+- Multi-step indicators (plan, design, create, build, comprehensive...)
+- Analysis keywords (compare, evaluate, research, analyze...)
+- Query length and structure
+- Multiple question marks or "and" conjunctions
 
-## Running the Application
-
-The application runs in autonomous mode where AI designs a custom agent topology for each question:
-
-```bash
-python app.py
+**Complexity Mapping:**
+```
+Score < 1:    Very Simple  → depth=1, 1-2 agents
+Score 1-2:    Simple       → depth=2, 2-4 agents  
+Score 3-4:    Moderate     → depth=3, 4-6 agents
+Score 5-7:    Complex      → depth=4, 6-8 agents
+Score 8+:     Very Complex → depth=5, 8-12+ agents
 ```
 
-Optional flags:
-```bash
-python app.py --debug  # Enable debug logging
+### Hierarchical Agent System
+
+```
+Level 0: User Query
+├─ Meta-Coordinator (analyzes & plans)
+├─ Agent 1: Coordinator [can delegate]
+│  └─ Level 1: Sub-query
+│     ├─ Sub-Agent 1.1: Researcher
+│     ├─ Sub-Agent 1.2: Analyzer
+│     └─ Sub-Agent 1.3: Synthesizer
+├─ Agent 2: Writer
+└─ Agent 3: Synthesizer
 ```
 
-## Usage
+### Execution Flow
 
-### Interactive Commands
+1. **Query Analysis** → Complexity scoring (automated)
+2. **Meta-Planning** → Coordinator designs agent topology
+3. **Agent Execution** → Sequential/hierarchical execution
+4. **Delegation** (if needed) → Recursive sub-agent creation
+5. **Synthesis** → Final answer compilation
+6. **Visualization** → Graphs and traces
 
-- Type your question and press Enter
-- `help` - Show help information
-- `exit` or `quit` - Exit the application
-- `Ctrl+C` - Graceful shutdown
-- `Ctrl+D` - EOF exit
+## 📦 Prerequisites
 
-### Observability Dashboard
+- **Python 3.11+**
+- **Ollama** - [Download from ollama.com](https://ollama.com)
 
-1.  When the app starts, you'll see: `Phoenix UI is running at http://localhost:6006`
-2.  Open that URL in your browser
-3.  Navigate to the **Traces** tab
-4.  Watch real-time execution traces showing:
-    - User inputs
-    - Agent reasoning
-    - Tool calls (searches)
-    - Tool outputs
-    - Final responses
+## 🚀 Quick Start
 
-### Single-Agent Workflow
+### 1. Install Ollama & Model
+```bash
+# Install Ollama, then pull the model
+ollama pull llama3.2:1b
+```
 
-1.  User inputs query
-2.  Agent analyzes query
-3.  Agent decides if tools are needed
-4.  Tools execute (e.g., web search)
-5.  Agent synthesizes final answer
-6.  All steps traced in Phoenix
-Autonomous Workflow
+### 2. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-1.  User inputs query
-2.  **AI analyzes query** and designs optimal agent topology
-3.  **Custom agents created** based on query requirements
-4.  Agents execute in designed workflow (e.g., planner → researcher → synthesizer)
-5.  Tools used as needed (search, analysis)
-6.  Final answer synthesized and returned
-7.  Full topology and trace visible in CLI
+### 3. Run the Application
+```bash
+python -m src.main
+```
 
-### Example Topologies
+### 4. Access Phoenix Dashboard
+Open http://localhost:6006 in your browser to see real-time traces.
 
-**Question:** "What are the latest AI developments?"
-- **Topology:** searcher → synthesizer (needs current info)
+## 💡 Usage Examples
 
-**Question:** "Compare Python and Rust"
-- **Topology:** planner → analyzer → critic → synthesizer (needs analysis)
+### Simple Query (1 agent)
+```
+❓ Your question: What is Python?
 
-**Question:** "Explain quantum computing"
-- **Topology:** analyzer → synthesizer (direct explanation
+📊 Complexity: Very Simple (score: 0.0) → max_depth: 1
+📋 Execution Plan (max depth: 1): Direct explanation
+├── 🤖 Step 1: ANALYZER
+    └── Task: Explain what Python is
+```
 
-1.  User inputs query
-2.  Agent analyzes query
-3.  Agent decides if tools are needed
-4.  Tools execute (e.g., web search)
-5.  Agent synthesizes final answer
-6.  All steps traced in Phoenix
+### Moderate Query (4-6 agents)
+```
+❓ Your question: Plan a 3-day trip to Paris with budget
 
-## Production Features
+📊 Complexity: Moderate (score: 3.5) → max_depth: 3
+📋 Execution Plan (max depth: 3): Travel planning
+├── 🤖 Step 1: RESEARCHER
+├── 🤖 Step 2: PLANNER
+├── 🤖 Step 3: ANALYZER
+├── 🤖 Step 4: WRITER
+└── 🤖 Step 5: SYNTHESIZER
+```
 
-### Error Handling
-- Environment validation on startup
-- Graceful shutdown on signals (SIGINT/SIGTERM)
-- Input validation
-- Comprehensive exception handling
-- Detailed error logging
+### Complex Query (8+ agents with delegation)
+```
+❓ Your question: Create a comprehensive business plan with market research, financial projections, and marketing strategy
 
-### Configuration Management
-- Environment-based configuration
-- Type-safe config class
-- Sensible defaults
+📊 Complexity: Very Complex (score: 11.5) → max_depth: 5
+📋 Execution Plan (max depth: 5): Business planning
+├── 🤖 Step 1: COORDINATOR 🔀 [can delegate]
+│   └── [Delegates to 6 sub-agents]
+└── 🤖 Step 2: SYNTHESIZER
+```
 
-### Logging
-- Dual logging (file + console)
-- Structured log format
-- Different log levels
-- Rotating logs for production
+## 🎮 Interactive Commands
 
-### Monitoring
-- Query counting
-- Session statistics
-- Full trace capture
-- Error tracking
+| Command | Description |
+|---------|-------------|
+| `quit` / `exit` | Exit application |
+| `memory` | Show conversation history summary |
+| `show-memory` | Display detailed conversation table |
+| `clear` | Clear conversation memory |
+| Graph prompt | Generate interactive HTML graph after each query |
 
-## Troubleshooting
+## 📊 Visualization
 
-### "Environment validation failed"
-- Ensure Ollama is running: `ollama serve`
-- Verify model is installed: `ollama list`
-- Pull model if needed: `ollama pull llama3.1`
+### Terminal Output
+- **Rich Tree**: Hierarchical plan visualization
+- **Progress Tables**: Real-time execution status
+- **Complexity Analysis**: Detailed scoring breakdown
 
-### "Phoenix setup failed"
-- Port 6006 might be in use
-- Change `PHOENIX_PORT` in `.env`
-- Check firewall settings
+### Interactive Graphs
+- **PyVis Network**: Saved to `execution_graphs/`
+- **Node Colors**: Role-based (researcher=blue, planner=orange, etc.)
+- **Hover Details**: Task, status, output preview
+- **Auto-Open**: Browser opens automatically (optional)
 
-### No traces in Phoenix
-- Ensure Phoenix UI is open in browser
-- Refresh the Traces tab
-- Check console for errors
+## 🔧 Configuration
 
-## Project Structure
+Create `.env` file (optional):
+```bash
+OLLAMA_MODEL=llama3.2:1b
+OLLAMA_TEMPERATURE=0.7
+PHOENIX_PORT=6006
+LOG_LEVEL=INFO
+```
+
+## 📚 Role Library
+
+| Role | Description | Can Delegate |
+|------|-------------|--------------|
+| **Researcher** | Web search, fact-finding | ❌ |
+| **Analyzer** | Data analysis, comparisons | ❌ |
+| **Planner** | Strategic planning | ✅ |
+| **Writer** | Content creation | ❌ |
+| **Coder** | Code generation | ❌ |
+| **Critic** | Quality review | ❌ |
+| **Synthesizer** | Result compilation | ❌ |
+| **Coordinator** | Workflow management | ✅ |
+
+## 🎯 Use Cases
+
+- **Simple Q&A**: Direct answers (1-2 agents)
+- **Research Tasks**: Web search + analysis (3-4 agents)
+- **Planning**: Multi-step strategies (4-6 agents)
+- **Content Creation**: Research + write + review (5-7 agents)
+- **Complex Projects**: Hierarchical delegation (8-12+ agents)
+
+## 📖 Documentation
+
+- [HIERARCHICAL_AGENTS.md](HIERARCHICAL_AGENTS.md) - Deep dive into multi-layer architecture
+- [VISUALIZATION.md](VISUALIZATION.md) - Visualization features and usage
+
+## 🔍 Observability
+
+**Arize Phoenix Dashboard** (http://localhost:6006):
+- **Traces Tab**: See all LLM calls with unique names
+- **Metadata**: Agent role, task, depth level
+- **Tags**: Filter by role, operation type
+- **Timeline**: Execution flow visualization
+
+## 🛠️ Project Structure
 
 ```
 test_langchain/
-├── src/                      # Source code
-│   ├── __init__.py          # Package initialization
-│   ├── main.py              # Application entry point
-│   ├── config.py            # Configuration management
-│   ├── agent.py             # Agent creation and management
-│   ├── observability.py     # Phoenix observability setup
-│   ├── tools.py             # Tool definitions and management
-│   └── cli.py               # Command-line interface
-├── tests/                    # Test suite
-│   ├── __init__.py
-│   ├── test_config.py       # Configuration tests
-│   ├── test_tools.py        # Tool tests
-│   └── test_cli.py          # CLI tests
-├── app.py                    # Main entry point script
-├── requirements.txt          # Python dependencies
-├── .env                      # Environment configuration
-├── .gitignore               # Git ignore rules
-├── agent.log                # Application logs (generated)
-└── README.md                # This file
+├── src/
+│   ├── main.py                    # Interactive CLI
+│   ├── meta_agent_system.py       # Core orchestration engine
+│   ├── meta_coordinator.py        # AI-based planning
+│   ├── role_library.py            # Agent role definitions
+│   ├── tools.py                   # DuckDuckGo search tools
+│   ├── visualization.py           # Rich + PyVis rendering
+│   ├── observability.py           # Phoenix tracing
+│   └── config.py                  # Configuration
+├── execution_graphs/              # Generated HTML graphs
+├── requirements.txt               # Dependencies
+├── HIERARCHICAL_AGENTS.md         # Architecture docs
+├── VISUALIZATION.md               # Visualization guide
+└── README.md                      # This file
 ```
 
-## Running Tests
+## 🚨 Troubleshooting
 
+### "Ollama connection failed"
 ```bash
-# Run all tests
-python -m pytest tests/
+# Start Ollama server
+ollama serve
 
-# Run with coverage
-python -m pytest tests/ --cov=src --cov-report=html
-
-# Run specific test file
-python -m pytest tests/test_config.py -v
+# Verify model is available
+ollama list
+ollama pull llama3.2:1b
 ```
 
-- `app.py`: The main application script with the agentic workflow.
-- `.env`: Environment variables (API keys).
-- `.venv/`: Python virtual environment.
+### "Phoenix not starting"
+```bash
+# Port 6006 might be in use
+# Change PHOENIX_PORT in .env or:
+export PHOENIX_PORT=6007
+python -m src.main
+```
 
-## Observability (Local with Arize Phoenix)
+### "No delegation happening"
+- Check if query complexity score is high enough (>3)
+- Verify coordinator role has `can_delegate=True`
+- Look for delegation JSON in agent output logs
 
-To see exactly what the model is asking and the tools it calls **without sending data externally**, we use **Arize Phoenix**.
+## 📈 Performance Notes
 
-1.  **Install Dependencies**:
-    ```bash
-    pip install arize-phoenix openinference-instrumentation-langchain
-    ```
+- **llama3.2:1b**: Fast inference (~1-2s per agent)
+- **Scaling**: Up to 12 agents tested successfully
+- **Memory**: 4GB RAM recommended for complex workflows
+- **Storage**: HTML graphs are ~100KB each
 
-2.  **Run the App**:
-    ```bash
-    python app.py
-    ```
+## 🔮 Future Enhancements
 
-3.  **View Traces**:
-    - The app will print a URL (usually `http://localhost:6006`).
-    - Open this URL in your browser.
-    - You will see a dashboard with all the traces, inputs, outputs, and tool calls.
+- [ ] Custom role creation from CLI
+- [ ] Persistent memory database (SQLite)
+- [ ] Multi-model support (different LLMs per role)
+- [ ] Agent learning from feedback
+- [ ] Parallel agent execution
+- [ ] Cost tracking and optimization
+
+## 📝 License
+
+MIT License - See LICENSE file for details
+
+## 🙏 Acknowledgments
+
+Built with:
+- [LangChain](https://github.com/langchain-ai/langchain) - Agent orchestration
+- [Ollama](https://ollama.com) - Local LLM runtime
+- [Arize Phoenix](https://github.com/Arize-ai/phoenix) - Observability
+- [Rich](https://github.com/Textualize/rich) - Terminal UI
+- [PyVis](https://github.com/WestHealth/pyvis) - Network graphs
+
+---
+
+**Built with ❤️ for adaptive AI agent systems**
