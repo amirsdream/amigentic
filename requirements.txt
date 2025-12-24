@@ -17,6 +17,14 @@ opentelemetry-sdk>=1.39.0
 opentelemetry-exporter-otlp>=1.39.0
 opentelemetry-exporter-otlp-proto-http>=1.39.0
 
+# Multi-agent and Visualization
+pyvis>=0.3.2
+rich>=13.0.0
+langgraph>=1.0.0
+langgraph-checkpoint>=3.0.0
+langsmith>=0.5.0
+gradio>=5.0.0
+
 # Development dependencies
 pytest>=7.0.0
 pytest-cov>=4.0.0

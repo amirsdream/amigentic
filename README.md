@@ -4,13 +4,18 @@ A production-ready LangChain application with an **agentic workflow** using a **
 
 ## Features
 
+- 🧠 **Autonomous Agent Design**: AI designs custom multi-agent topology for each question
 - 🤖 **Local LLM**: Uses Ollama with Llama 3.1 (no external API calls)
 - 🔍 **Web Search**: DuckDuckGo integration for real-time information
+- 🏗️ **Dynamic Topology**: Different agent workflows per query type
+- � **Adaptive Complexity**: Automatically scales depth and agent count based on query complexity
+- 🔀 **Hierarchical Delegation**: Agents can delegate to specialized sub-agents (up to 5 levels deep)
+- �💾 **Conversation Memory**: Persistent context across interactions
 - 📊 **Observability**: Full tracing with Arize Phoenix (local, no cloud)
+- 🎨 **Execution Visualization**: Terminal trees + interactive HTML graphs (PyVis)
 - 📝 **Logging**: Comprehensive logging to file and console
 - ⚙️ **Configuration**: Environment-based configuration
 - 🛡️ **Error Handling**: Robust error handling and validation
-- 🎯 **Interactive**: Chat-style CLI interface with commands
 
 ## Prerequisites
 
@@ -39,8 +44,15 @@ A production-ready LangChain application with an **agentic workflow** using a **
 
 ## Running the Application
 
+The application runs in autonomous mode where AI designs a custom agent topology for each question:
+
 ```bash
 python app.py
+```
+
+Optional flags:
+```bash
+python app.py --debug  # Enable debug logging
 ```
 
 ## Usage
@@ -65,22 +77,34 @@ python app.py
     - Tool outputs
     - Final responses
 
-### Logs
+### Single-Agent Workflow
 
-- Console logs: Real-time output with INFO level
-- File logs: `agent.log` with detailed execution history
+1.  User inputs query
+2.  Agent analyzes query
+3.  Agent decides if tools are needed
+4.  Tools execute (e.g., web search)
+5.  Agent synthesizes final answer
+6.  All steps traced in Phoenix
+Autonomous Workflow
 
-## Architecture
+1.  User inputs query
+2.  **AI analyzes query** and designs optimal agent topology
+3.  **Custom agents created** based on query requirements
+4.  Agents execute in designed workflow (e.g., planner → researcher → synthesizer)
+5.  Tools used as needed (search, analysis)
+6.  Final answer synthesized and returned
+7.  Full topology and trace visible in CLI
 
-### Components
+### Example Topologies
 
-1.  **Agent**: LangGraph-based agent using `create_agent`
-2.  **LLM**: ChatOllama connecting to local Ollama instance
-3.  **Tools**: DuckDuckGo search for web queries
-4.  **Observability**: OpenTelemetry + Phoenix for tracing
-5.  **Logging**: Python logging to file and console
+**Question:** "What are the latest AI developments?"
+- **Topology:** searcher → synthesizer (needs current info)
 
-### Workflow
+**Question:** "Compare Python and Rust"
+- **Topology:** planner → analyzer → critic → synthesizer (needs analysis)
+
+**Question:** "Explain quantum computing"
+- **Topology:** analyzer → synthesizer (direct explanation
 
 1.  User inputs query
 2.  Agent analyzes query
