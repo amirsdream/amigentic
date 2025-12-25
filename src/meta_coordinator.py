@@ -106,6 +106,24 @@ class MetaCoordinator:
         self.config = config
         self.llm = llm
         self.role_library = RoleLibrary()
+        self._warmed_up = False
+    
+    def warmup(self) -> None:
+        """Warm up the LLM with a simple test call to reduce first-query latency."""
+        if self._warmed_up:
+            return
+        
+        try:
+            logger.info("🔥 Warming up coordinator LLM...")
+            # Simple, fast test call
+            self.llm.invoke([
+                SystemMessage(content="You are a helpful assistant."),
+                HumanMessage(content="Hello")
+            ])
+            self._warmed_up = True
+            logger.info("✓ Coordinator warmed up")
+        except Exception as e:
+            logger.warning(f"Warmup failed: {e}")
     
     def create_execution_plan(self, query: str, conversation_history: str = "", depth: int = 0, max_depth: int = 3) -> ExecutionPlan:
         """Create an execution plan for the query.
@@ -119,12 +137,37 @@ class MetaCoordinator:
         Returns:
             Execution plan with agents to create and sequence.
         """
+        # Warm up on first use
+        if not self._warmed_up:
+            self.warmup()
+        
         logger.info(f"📋 Creating execution plan for: {query[:100]}...")
         
         # Build the planning prompt - keep it concise for speed
         system_prompt = f"""You are a meta-coordinator creating execution plans. Output ONLY valid JSON.
 
 Available roles: {', '.join(self.role_library.list_roles())}
+
+CRITICAL: MATCH COMPLEXITY TO QUERY TYPE
+
+SIMPLE (1 agent ONLY):
+- Greetings: "hi", "hello", "hey", "how are you"
+- Yes/No questions: "is X true?", "can you do Y?"
+- Single fact lookups: "what is X?", "who is Y?"
+- Basic definitions: "define X"
+→ Use ONLY 1 analyzer agent with a brief, direct task
+
+MEDIUM (1-2 agents):
+- Explanations: "explain how X works", "why does Y happen?"
+- Single topic analysis: "analyze X", "describe Y"
+- Simple summaries: "summarize X"
+→ Use 1 analyzer/writer, or 1 researcher + 1 analyzer if current info needed
+
+COMPLEX (2+ agents with synthesizer):
+- Comparisons: "compare X vs Y", "differences between X and Y"
+- Multi-topic research: "research X and Y", "latest news on X and Y"
+- Multi-step tasks: "plan and implement X", "analyze then improve Y"
+→ Use 2+ specialists + synthesizer as final agent
 
 ROLE SELECTION RULES:
 - "researcher": ONLY for web search - current info, facts, news
@@ -148,14 +191,20 @@ Dependencies:
 - "depends_on": [0] → waits for agent 0
 - "depends_on": [0, 1] → waits for agents 0 and 1
 
-Examples:
-"Explain X" → {{"description": "Explanation", "agents": [{{"role": "analyzer", "task": "Explain X clearly", "depends_on": []}}]}}
+EXAMPLES:
+"Hi" → {{"description": "Simple greeting", "agents": [{{"role": "analyzer", "task": "Respond warmly in 1-2 sentences", "depends_on": []}}]}}
 
-"Compare X vs Y" → {{"description": "Comparison", "agents": [
-  {{"role": "researcher", "task": "Research X", "depends_on": []}},
-  {{"role": "researcher", "task": "Research Y", "depends_on": []}},
-  {{"role": "synthesizer", "task": "Compare X and Y based on research", "depends_on": [0, 1]}}
+"What is Python?" → {{"description": "Simple definition", "agents": [{{"role": "analyzer", "task": "Define Python programming language briefly", "depends_on": []}}]}}
+
+"Explain quantum computing" → {{"description": "Explanation", "agents": [{{"role": "analyzer", "task": "Explain quantum computing clearly", "depends_on": []}}]}}
+
+"Compare Python vs Rust" → {{"description": "Detailed comparison", "agents": [
+  {{"role": "researcher", "task": "Research Python features and use cases", "depends_on": []}},
+  {{"role": "researcher", "task": "Research Rust features and use cases", "depends_on": []}},
+  {{"role": "synthesizer", "task": "Compare Python and Rust based on research findings", "depends_on": [0, 1]}}
 ]}}
+
+REMEMBER: More agents ≠ better results. Use the MINIMUM agents needed!
 
 Output ONLY JSON - no explanations, no markdown blocks."""
 

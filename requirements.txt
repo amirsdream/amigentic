@@ -27,6 +27,17 @@ langgraph-checkpoint>=3.0.0
 langsmith>=0.5.0
 gradio>=5.0.0
 
+# Web API
+fastapi>=0.115.0
+uvicorn>=0.34.0
+websockets>=14.1
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+passlib>=1.7.4
+bcrypt>=4.1.0,<5.0
+
 # Development dependencies
 pytest>=7.0.0
 pytest-cov>=4.0.0

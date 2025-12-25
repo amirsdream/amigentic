@@ -96,8 +96,8 @@ class MetaAgentSystem:
                     "Install it with: pip install langchain-anthropic"
                 )
             return ChatAnthropic(
-                model=config.anthropic_model,
-                api_key=config.anthropic_api_key if config.anthropic_api_key else None,  # type: ignore
+                model_name=config.anthropic_model,  # ChatAnthropic uses model_name, not model
+                anthropic_api_key=config.anthropic_api_key,  # type: ignore
                 temperature=config.llm_temperature
             )
         else:

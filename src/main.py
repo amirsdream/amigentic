@@ -96,7 +96,10 @@ async def main_async() -> int:
     langgraph_executor = LangGraphExecutor(meta_system)
     logger.info("✓ LangGraph executor ready")
     
-    console.print("[green]✓ System ready! LangGraph infrastructure enabled.[/green]")
+    # Warm up the coordinator to reduce first query latency
+    console.print("[dim]🔥 Warming up coordinator...[/dim]", end="")
+    meta_system.coordinator.warmup()
+    console.print("\r[green]✓ System ready! LangGraph infrastructure enabled.[/green]")
     console.print("[dim]Commands: 'quit', 'memory', 'clear', 'show-memory', 'help'[/dim]\n")
     
     # Interactive loop

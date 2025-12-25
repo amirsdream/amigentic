@@ -2,12 +2,14 @@
 
 ## Overview
 
-Magentic is a dynamic meta-agent system that uses AI to generate unique agent topologies for each query.
+Magentic is a dynamic meta-agent system that uses AI to generate unique agent topologies for each query. The system features a modern web UI with real-time WebSocket streaming for live execution visualization.
 
-## Flow
+## System Flow
 
 ```
-User Query
+User Query (Web UI or CLI)
+    ↓
+WebSocket Connection / Direct API
     ↓
 Meta-Coordinator (AI analyzes complexity)
     ↓
@@ -16,9 +18,41 @@ Dynamic Agent Plan (unique per query)
 LangGraph Execution (state + checkpointing)
     ↓
 Layer-Based Parallel Execution
-    ↓
-Final Output
+    ↓  (Real-time WebSocket updates)
+Final Output → Web UI or Terminal
 ```
+
+## Architecture Layers
+
+### 1. Presentation Layer (Frontend)
+- **React Application**: Modern SPA with Vite build system
+- **WebSocket Client**: Real-time bidirectional communication
+- **Markdown Renderer**: Beautiful formatting with syntax highlighting
+- **State Management**: React hooks for UI state
+- **Components**: Message display, execution visualization, agent steps
+
+### 2. API Layer (Backend)
+- **FastAPI Server**: Async web framework with WebSocket support
+- **REST Endpoints**: `/health`, `/query`, `/memory`
+- **WebSocket Endpoint**: `/ws` for real-time streaming
+- **Progress Streaming**: Events for plan, agent_start, agent_complete, complete, error
+
+### 3. Coordination Layer
+- **Meta-Coordinator**: AI-driven planning with complexity assessment
+- **Plan Generation**: Creates ExecutionPlan with agents and dependencies
+- **Complexity Scaling**: Simple (1 agent), Medium (1-2), Complex (2+ with synthesizer)
+
+### 4. Execution Layer
+- **LangGraph Executor**: DAG-based parallel execution
+- **State Management**: Persistent state across agent executions
+- **Checkpointing**: Resume from failures
+- **Layer Execution**: Topological sort for optimal parallelization
+
+### 5. Agent Layer
+- **Role Library**: 8 specialized agent roles
+- **Dynamic Instantiation**: Agents created per execution plan
+- **Tool Integration**: DuckDuckGo search for researchers
+- **Memory**: Conversation history (last 4 messages)
 
 ## Core Components
 
