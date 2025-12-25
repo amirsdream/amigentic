@@ -4,63 +4,67 @@
 
 ![Magentic UI](assets/magentic.png)
 
-## 🌟 New: Beautiful Web UI with Authentication
+## Overview
 
-Magentic now includes a stunning React-based interface with user authentication and profiles!
+Magentic is an intelligent multi-agent system that dynamically analyzes your queries and creates optimal networks of specialized AI agents to provide comprehensive answers. Unlike traditional chatbots, Magentic automatically scales from simple single-agent responses to complex multi-agent workflows based on query complexity.
 
-### UI Features
+## What Makes Magentic Unique
+
+- **Dynamic Agent Planning**: AI meta-coordinator analyzes each query and generates the optimal agent topology
+- **Parallel Execution**: Independent agents run simultaneously across execution layers for maximum efficiency
+- **Intelligent Scaling**: Automatically uses minimal agents for simple queries, scales up for complex tasks
+- **Web Search Integration**: Research agents can fetch current information from the web
+- **Beautiful Web Interface**: Modern React UI with real-time execution visualization
+- **User Authentication**: Secure accounts with conversation history and personal profiles
+
+## Core Features
+
+### Agent Orchestration
+- 🎯 **8 Specialized Roles**: Researcher, Analyzer, Planner, Writer, Coder, Critic, Synthesizer, Coordinator
+- ⚡ **Parallel Execution**: DAG-based layer execution with LangGraph
+- 🔄 **Layer Synchronization**: Barrier nodes ensure reliable parallel execution
+- 💾 **State Management**: Checkpointing and crash recovery with resumable execution
+- 🗨️ **Conversation History**: Agents receive context from previous conversation steps
+
+### Web Interface
 - 💬 **Interactive Chat**: Clean, modern chat interface with gradient design
-- 🔐 **User Authentication**: Login/Register system with bcrypt password hashing
+- 🔐 **User Authentication**: Login/Register system with secure password hashing
 - 👤 **User Profiles**: Personal profiles with avatars, stats, and conversation history
-- 🎭 **Guest Mode**: Continue as guest without registration
-- 💾 **Persistent History**: All conversations saved to SQLite database
-- 🔴 **Live Progress**: Animated rotating indicator showing real-time execution status
-- 📊 **Expandable Steps**: Click any agent to see detailed execution info and timing
+- 🎭 **Guest Mode**: Try the system without registration
+- 💾 **Persistent History**: All conversations saved to database
 - ⚡ **Real-time Updates**: WebSocket-based live progress streaming
-- 🎨 **Markdown Support**: Beautiful rendering of formatted text, code blocks with syntax highlighting
-- 👁️ **Toggle Details**: Show/hide execution details to focus on answers
-- ✨ **Beautiful Design**: Purple gradient UI with Magentic branding
+- 📊 **Expandable Details**: Click any agent to see execution info and timing
+- 🎨 **Markdown Support**: Beautiful rendering with syntax highlighting
+- 👁️ **Toggle View**: Show/hide execution details
 
-### Tech Stack
-**Frontend:**
-- React 18 + Vite for fast development
-- Tailwind CSS with custom animations
-- WebSocket for real-time updates
-- react-markdown with GitHub-flavored markdown
-- Lucide React for icons
+### Technical Capabilities
+- 🔍 **Web Search**: DuckDuckGo integration for current information
+- 📊 **Observability**: Phoenix dashboard for LLM tracing and debugging
+- 🐛 **Debug Mode**: Optional state visualization for troubleshooting
+- 🎭 **Multi-LLM Support**: Works with Ollama (local), OpenAI, and Claude
+- ⚙️ **Configurable**: Customize output limits, temperature, and more
+
+## Tech Stack
 
 **Backend:**
-- FastAPI with WebSocket support
-- SQLAlchemy ORM with SQLite database
-- Alembic for database migrations
-- Passlib + bcrypt for password security
-- LangGraph for agent orchestration
+- **FastAPI** - Modern async web framework with WebSocket support
+- **SQLAlchemy** - Database ORM with Alembic migrations
+- **LangGraph** - Agent orchestration and execution
+- **Passlib + bcrypt** - Secure password hashing
+- **SQLite** - Local database with connection pooling
 
-**Database:**
-- SQLite with proper connection pooling
-- User profiles with authentication
-- Conversation history with full metadata
-- Automatic schema migrations with Alembic
+**Frontend:**
+- **React 18** - Modern UI library
+- **Vite** - Lightning-fast build tool with HMR
+- **Tailwind CSS** - Utility-first styling with custom animations
+- **react-markdown** - Markdown rendering with GitHub-flavored markdown
+- **rehype-highlight** - Syntax highlighting for code blocks
+- **Lucide React** - Beautiful icon library
 
-## Features
-
-- 🎯 **Dynamic Planning**: AI analyzes query complexity and generates optimal agent topology
-- ⚡ **Parallel Execution**: DAG-based layer execution with LangGraph for maximum efficiency
-- � **Layer Synchronization**: Barrier nodes ensure all agents in a layer complete before next layer starts
-- 💾 **State Management**: Checkpointing and crash recovery with resumable execution
-- 🗨️ **Conversation History**: Each agent receives context from previous conversation steps
-- 🔍 **Web Search**: DuckDuckGo integration for research agents to fetch current information
-- 📊 **Observability**: Phoenix dashboard for real-time LLM tracing and debugging
-- 🐛 **Debug Mode**: Optional state visualization showing agent outputs and execution flow
-- 🎨 **8 Specialized Roles**: Researcher, Analyzer, Planner, Writer, Coder, Critic, Synthesizer, Coordinator
-- 🖥️ **Modern Web UI**: React-based interface with WebSocket streaming and markdown rendering
-- 🧠 **Smart Scaling**: Automatically uses minimal agents for simple queries, scales up for complex tasks
-- 🔄 **Conversation Memory**: Maintains context across multiple queries
-- 🎭 **Multi-LLM Support**: Works with Ollama (local), OpenAI, and Claude
-- ⚙️ **Configurable Output**: Set UI display limits to control agent response length
-- � **Authentication**: Secure login/register with bcrypt password hashing
-- 👤 **User Profiles**: Personal profiles with avatars, stats, and persistent conversation history
-- 💾 **SQLite Database**: Local database with proper migrations for profile and history storage
+**LLM Support:**
+- **Ollama** - Local, private, free (llama3.2, mistral, etc.)
+- **OpenAI** - GPT-4, GPT-3.5
+- **Claude** - Claude 3.5 Sonnet, Opus
 
 ## Quick Start
 
@@ -159,7 +163,67 @@ On first visit, you'll see a login modal with options to:
 - **Login** - Use existing account
 - **Continue as Guest** - No registration needed
 
-### Database Management
+## Usage
+
+### Example Queries
+
+Try these to see the agent system in action:
+
+- **Simple**: "What is Python?" → Uses 1 analyzer agent
+- **Medium**: "Explain how neural networks work" → Uses 1-2 agents
+- **Complex**: "Compare React vs Vue and recommend which to use for a large e-commerce site" → Uses multiple researchers + synthesizer
+
+### How It Works
+
+1. **Query Analysis**: Meta-coordinator analyzes your question
+2. **Agent Planning**: Generates optimal network of specialized agents
+3. **Parallel Execution**: Agents run simultaneously in layers
+4. **Layer Barriers**: Ensures all agents in a layer complete before next layer starts
+5. **Synthesis**: Final agent combines results into comprehensive answer
+
+### CLI Mode
+
+For command-line usage without the web UI:
+
+```bash
+python app.py
+```
+
+## Configuration
+
+Edit `.env` file to customize behavior:
+
+**System Settings:**
+```bash
+MAX_PARALLEL_AGENTS=3        # Concurrent agents (2-5 recommended)
+LLM_TEMPERATURE=0.7          # 0.0 (precise) to 2.0 (creative)
+```
+
+**Ollama Settings:**
+```bash
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2:1b     # or llama3.1, mistral, etc.
+```
+
+**OpenAI Settings:**
+```bash
+OPENAI_MODEL=gpt-4o          # or gpt-4-turbo, gpt-3.5-turbo
+OPENAI_API_KEY=your-key-here
+```
+
+**Claude Settings:**
+```bash
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+ANTHROPIC_API_KEY=your-key-here
+```
+
+**Debug & Display:**
+```bash
+DEBUG_STATE=false            # Set to true for state visualization
+UI_DISPLAY_LIMIT=200         # Character limit for output (min: 50)
+```
+
+## Database Management
 
 ```bash
 # Initialize database
@@ -180,98 +244,15 @@ alembic current
 alembic revision --autogenerate -m "Description"
 ```
 
-## CLI Mode
-
-For command-line usage without the web UI:
-
-```bash
-python app.py
-```
-
-## Example Queries
-
-Try these to see the agent system in action:
-
-- **Simple**: "What is Python?" (uses 1 agent)
-- **Medium**: "Explain how neural networks work" (uses 1-2 agents)
-- **Complex**: "Compare React vs Vue and recommend which to use for a large e-commerce site" (uses multiple agents with synthesis)
-
-## Features in Detail
-
-### 🎯 Dynamic Agent Planning
-
-The meta-coordinator analyzes your query and creates an optimal agent network:
-- **Simple queries** → Single agent
-- **Complex queries** → Multiple specialized agents in parallel
-- **Research tasks** → Includes web search capabilities
-
-### 🔐 Authentication & Profiles
-
-- Register with just username/password (no email needed)
-- Guest mode for trying without account
-- Personal conversation history
-- User statistics (queries, agents used)
-- Avatar customization
-
-### 📊 Real-time Visualization
-
-Watch your query being processed in real-time:
-- Live agent execution status
-- Expandable agent details
-- Execution timing
-- Beautiful markdown rendering with syntax highlighting
-
-## Tech Stack
-
-**Backend:**
-- **FastAPI** - Modern async web framework
-- **SQLAlchemy** - Database ORM with migrations
-- **LangGraph** - Agent orchestration
-- **Passlib + bcrypt** - Secure password hashing
-- **WebSockets** - Real-time updates
-
-**Frontend:**
-- **React 18** - Modern UI library
-- **Vite** - Lightning-fast build tool with HMR
-- **Tailwind CSS** - Utility-first styling
-- **react-markdown** - Markdown rendering with GitHub-flavored markdown
-- **rehype-highlight** - Syntax highlighting for code blocks
-- **Lucide React** - Beautiful icon library
-
-**LLM Support:**
-- **Ollama** - Local, private, free
-- **OpenAI** - GPT-4, GPT-3.5
-- **Claude** - Claude 3.5 Sonnet, Opus
-
 ## Documentation
 
-- [Authentication Guide](docs/AUTHENTICATION.md) - User registration, login, and profiles
-- [Architecture Guide](docs/ARCHITECTURE.md) - Detailed system architecture
 - [Project Overview](docs/PROJECT_OVERVIEW.md) - Comprehensive project documentation
+- [Architecture Guide](docs/ARCHITECTURE.md) - Detailed system architecture
+- [Layer Barriers](docs/LAYER_BARRIERS.md) - Execution synchronization system
+- [Authentication Guide](docs/AUTHENTICATION.md) - User registration and profiles
 - [Web UI Guide](frontend/README.md) - Frontend documentation
 - [Database Migrations](alembic/README.md) - Alembic migration guide
-
-## Advanced Configuration
-
-Edit `.env` file for custom settings:
-
-**System:**
-- `MAX_PARALLEL_AGENTS` - Concurrent agents (2-5 recommended)
-- `LLM_TEMPERATURE` - 0.0 (precise) to 2.0 (creative)
-
-**Ollama Settings:**
-- `OLLAMA_BASE_URL` - Default: `http://localhost:11434`
-- `OLLAMA_MODEL` - Models: `llama3.2:1b`, `llama3.1`, `mistral`
-
-**OpenAI Settings:**
-- `OPENAI_MODEL` - Models: `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo`
-
-**Claude Settings:**
-- `ANTHROPIC_MODEL` - Models: `claude-3-5-sonnet-20241022`, `claude-3-opus-20240229`
-
-**Debug & Display:**
-- `DEBUG_STATE` - Set to `true` to enable state visualization showing agent outputs (default: false)
-- `UI_DISPLAY_LIMIT` - Character limit for agent output display (default: 200, minimum: 50)
+- [Changelog](CHANGELOG.md) - Version history and updates
 
 ## Phoenix Dashboard (Optional)
 
@@ -279,6 +260,35 @@ For real-time LLM tracing and debugging, Phoenix is automatically available at:
 - **URL**: http://localhost:6006
 - **Features**: Request tracing, token usage, performance metrics
 
+## Architecture
+
+Magentic uses a sophisticated multi-layer architecture:
+
+1. **Meta-Coordinator**: LLM-based planner that analyzes queries and generates agent topologies
+2. **Agent Network**: Dynamic DAG of specialized agents executing in parallel layers
+3. **Layer Barriers**: Synchronization nodes ensuring reliable parallel execution
+4. **State Management**: LangGraph-based state with checkpointing and recovery
+5. **Web Interface**: React frontend with WebSocket streaming for real-time updates
+
+## Agent Roles
+
+- **Researcher**: Searches the web for current information
+- **Analyzer**: Analyzes data, explains concepts, answers questions
+- **Planner**: Creates step-by-step plans and strategies
+- **Writer**: Writes articles, stories, documentation
+- **Coder**: Generates and explains code
+- **Critic**: Reviews and improves content
+- **Synthesizer**: Combines multiple inputs into coherent output
+- **Coordinator**: Routes and delegates complex tasks
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
+
+## Support
+
+For issues, questions, or feature requests, please open an issue on GitHub.
