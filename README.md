@@ -2,6 +2,8 @@
 
 **Magnetic Agent Networks** - AI-powered meta-agent system with dynamic topology generation and parallel execution.
 
+![Magentic UI](assets/magentic.png)
+
 ## 🌟 New: Beautiful Web UI with Authentication
 
 Magentic now includes a stunning React-based interface with user authentication and profiles!
@@ -44,14 +46,18 @@ Magentic now includes a stunning React-based interface with user authentication 
 
 - 🎯 **Dynamic Planning**: AI analyzes query complexity and generates optimal agent topology
 - ⚡ **Parallel Execution**: DAG-based layer execution with LangGraph for maximum efficiency
+- � **Layer Synchronization**: Barrier nodes ensure all agents in a layer complete before next layer starts
 - 💾 **State Management**: Checkpointing and crash recovery with resumable execution
+- 🗨️ **Conversation History**: Each agent receives context from previous conversation steps
 - 🔍 **Web Search**: DuckDuckGo integration for research agents to fetch current information
 - 📊 **Observability**: Phoenix dashboard for real-time LLM tracing and debugging
+- 🐛 **Debug Mode**: Optional state visualization showing agent outputs and execution flow
 - 🎨 **8 Specialized Roles**: Researcher, Analyzer, Planner, Writer, Coder, Critic, Synthesizer, Coordinator
 - 🖥️ **Modern Web UI**: React-based interface with WebSocket streaming and markdown rendering
 - 🧠 **Smart Scaling**: Automatically uses minimal agents for simple queries, scales up for complex tasks
 - 🔄 **Conversation Memory**: Maintains context across multiple queries
 - 🎭 **Multi-LLM Support**: Works with Ollama (local), OpenAI, and Claude
+- ⚙️ **Configurable Output**: Set UI display limits to control agent response length
 - � **Authentication**: Secure login/register with bcrypt password hashing
 - 👤 **User Profiles**: Personal profiles with avatars, stats, and persistent conversation history
 - 💾 **SQLite Database**: Local database with proper migrations for profile and history storage
@@ -262,6 +268,10 @@ Edit `.env` file for custom settings:
 
 **Claude Settings:**
 - `ANTHROPIC_MODEL` - Models: `claude-3-5-sonnet-20241022`, `claude-3-opus-20240229`
+
+**Debug & Display:**
+- `DEBUG_STATE` - Set to `true` to enable state visualization showing agent outputs (default: false)
+- `UI_DISPLAY_LIMIT` - Character limit for agent output display (default: 200, minimum: 50)
 
 ## Phoenix Dashboard (Optional)
 

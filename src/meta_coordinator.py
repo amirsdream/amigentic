@@ -144,9 +144,28 @@ class MetaCoordinator:
         logger.info(f"📋 Creating execution plan for: {query[:100]}...")
         
         # Build the planning prompt - keep it concise for speed
-        system_prompt = f"""You are a meta-coordinator creating execution plans. Output ONLY valid JSON.
+        system_prompt = f"""You are a meta-coordinator creating execution plans.
 
 Available roles: {', '.join(self.role_library.list_roles())}
+
+OUTPUT REQUIREMENTS:
+You MUST respond with ONLY a JSON object. No text before or after. No markdown. No explanation.
+
+REQUIRED JSON STRUCTURE:
+{{
+  "description": "brief description of the plan",
+  "agents": [
+    {{"role": "ROLE_NAME", "task": "specific task description", "depends_on": []}},
+    {{"role": "ROLE_NAME", "task": "specific task description", "depends_on": [0]}}
+  ]
+}}
+
+FIELDS EXPLAINED:
+- "description": One sentence describing what the plan does
+- "agents": Array of agent objects
+  - "role": MUST be one of: {', '.join(self.role_library.list_roles())}
+  - "task": Specific task for this agent to perform
+  - "depends_on": Array of agent indices this agent waits for ([] = runs immediately)
 
 CRITICAL: MATCH COMPLEXITY TO QUERY TYPE
 
@@ -191,22 +210,24 @@ Dependencies:
 - "depends_on": [0] → waits for agent 0
 - "depends_on": [0, 1] → waits for agents 0 and 1
 
-EXAMPLES:
-"Hi" → {{"description": "Simple greeting", "agents": [{{"role": "analyzer", "task": "Respond warmly in 1-2 sentences", "depends_on": []}}]}}
+VALID RESPONSE EXAMPLES:
 
-"What is Python?" → {{"description": "Simple definition", "agents": [{{"role": "analyzer", "task": "Define Python programming language briefly", "depends_on": []}}]}}
+Example 1 - Simple greeting:
+{{"description": "Simple greeting", "agents": [{{"role": "analyzer", "task": "Respond warmly in 1-2 sentences", "depends_on": []}}]}}
 
-"Explain quantum computing" → {{"description": "Explanation", "agents": [{{"role": "analyzer", "task": "Explain quantum computing clearly", "depends_on": []}}]}}
+Example 2 - Definition:
+{{"description": "Define Python", "agents": [{{"role": "analyzer", "task": "Define Python programming language briefly", "depends_on": []}}]}}
 
-"Compare Python vs Rust" → {{"description": "Detailed comparison", "agents": [
+Example 3 - Complex comparison:
+{{"description": "Compare programming languages", "agents": [
   {{"role": "researcher", "task": "Research Python features and use cases", "depends_on": []}},
   {{"role": "researcher", "task": "Research Rust features and use cases", "depends_on": []}},
   {{"role": "synthesizer", "task": "Compare Python and Rust based on research findings", "depends_on": [0, 1]}}
 ]}}
 
-REMEMBER: More agents ≠ better results. Use the MINIMUM agents needed!
+REMEMBER: Use the MINIMUM agents needed!
 
-Output ONLY JSON - no explanations, no markdown blocks."""
+YOUR RESPONSE MUST BE ONLY THE JSON OBJECT - nothing else."""
 
         # Build human message with conversation context if available
         human_content = query
@@ -244,23 +265,25 @@ Output ONLY JSON - no explanations, no markdown blocks."""
             content = str(response.content) if response.content else ""
             
             # Log raw response for debugging
+            logger.info(f"📝 Raw LLM response:\n{content}")
             logger.debug(f"📝 Raw LLM response (first 500 chars): {content[:500]}...")
+            
+            # Clean up response - remove markdown blocks if present
+            cleaned_content = content.strip()
+            if "```json" in cleaned_content or "```" in cleaned_content:
+                logger.info("Removing markdown code blocks from response...")
+                cleaned_content = cleaned_content.replace("```json", "").replace("```", "").strip()
             
             # Parse JSON
             try:
-                plan_data = json.loads(content)
+                plan_data = json.loads(cleaned_content)
                 logger.info("✓ Successfully parsed JSON response")
                 logger.debug(f"📋 Parsed plan: {json.dumps(plan_data, indent=2)}")
             except json.JSONDecodeError:
-                # Extract JSON from text
-                logger.warning("⚠️ Response is not pure JSON, attempting to extract...")
+                # Extract JSON from text if still not valid
+                logger.warning(f"⚠️ Response is not valid JSON after cleanup, attempting to extract...\nCleaned response was:\n{cleaned_content}")
                 
-                # Try to remove markdown code blocks first
-                cleaned_content = content
-                if "```json" in content or "```" in content:
-                    logger.info("Found markdown code blocks, removing...")
-                    cleaned_content = content.replace("```json", "").replace("```", "")
-                
+                # Try to find JSON object boundaries
                 start = cleaned_content.find('{')
                 end = cleaned_content.rfind('}') + 1
                 if start >= 0 and end > start:

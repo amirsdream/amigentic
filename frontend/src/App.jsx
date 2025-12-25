@@ -98,47 +98,89 @@ function App() {
         break;
 
       case 'plan':
-        // Start new execution
+        // Start new execution - initialize agents from plan with 'pending' status
+        console.log('Plan received with agents:', data.data.agents);
         setCurrentExecution({
           stage: 'planned',
           plan: data.data,
-          agents: [],
+          agents: data.data.agents.map(agent => ({
+            ...agent,
+            status: 'pending', // Will be updated to 'running' then 'complete'
+          })),
           stageMessage: `Executing ${data.data.total_agents} agents across ${data.data.total_layers} layers`,
         });
         break;
 
       case 'agent_start':
-        console.log('Agent start:', data.data);
-        setCurrentExecution((prev) => ({
-          ...prev,
-          agents: [
-            ...(prev?.agents || []),
-            {
-              ...data.data,
-              status: 'running',
-              startTime: Date.now(),
-            },
-          ],
-        }));
+        console.log('Agent start received:', data.data.agent_id);
+        setCurrentExecution((prev) => {
+          if (!prev || !prev.agents) {
+            console.warn('No current execution when agent_start received');
+            return prev;
+          }
+          
+          // Update the existing agent from the plan to status 'running'
+          const updatedAgents = prev.agents.map((agent) => {
+            if (agent.agent_id === data.data.agent_id) {
+              console.log(`Setting agent ${agent.agent_id} to running`);
+              return {
+                ...agent,
+                status: 'running',
+                input: data.data.input,  // Capture what was handed to this agent
+                startTime: Date.now(),
+              };
+            }
+            return agent;
+          });
+          
+          return {
+            ...prev,
+            agents: updatedAgents,
+          };
+        });
         break;
 
       case 'agent_complete':
-        console.log('Agent complete:', data.data, 'Current agents:', executionRef.current?.agents);
-        setCurrentExecution((prev) => ({
-          ...prev,
-          agents: prev.agents.map((agent) =>
-            agent.agent_id === data.data.agent_id
-              ? {
-                  ...agent,
-                  status: 'complete',
-                  output: data.data.output,
-                  output_length: data.data.output_length,
-                  tool_calls: data.data.tool_calls,
-                  endTime: Date.now(),
-                }
-              : agent
-          ),
-        }));
+        console.log('Agent complete received:', {
+          completed_agent_id: data.data.agent_id,
+          current_agents: executionRef.current?.agents?.map(a => ({ id: a.agent_id, status: a.status })),
+          full_data: data.data
+        });
+        setCurrentExecution((prev) => {
+          if (!prev || !prev.agents) {
+            console.warn('No current execution or agents to update!');
+            return prev;
+          }
+          
+          // Check if agent exists before updating
+          const agentExists = prev.agents.some(a => a.agent_id === data.data.agent_id);
+          if (!agentExists) {
+            console.error(`Agent ${data.data.agent_id} not found in agents list!`, prev.agents.map(a => a.agent_id));
+          }
+          
+          const updatedAgents = prev.agents.map((agent) => {
+            if (agent.agent_id === data.data.agent_id) {
+              console.log(`Updating agent ${agent.agent_id} from ${agent.status} to complete`);
+              return {
+                ...agent,
+                status: 'complete',
+                input: data.data.input,  // Update input in case it wasn't set on agent_start
+                output: data.data.output,
+                output_length: data.data.output_length,
+                tool_calls: data.data.tool_calls,
+                endTime: Date.now(),
+              };
+            }
+            return agent;
+          });
+          
+          console.log('Updated agents:', updatedAgents.map(a => ({ id: a.agent_id, status: a.status })));
+          
+          return {
+            ...prev,
+            agents: updatedAgents,
+          };
+        });
         break;
 
       case 'complete':
@@ -187,6 +229,9 @@ function App() {
         timestamp: new Date(),
       },
     ]);
+
+    // Clear previous execution state before sending new query
+    setCurrentExecution(null);
 
     // Send to WebSocket
     ws.send(JSON.stringify({ query: input }));
@@ -535,6 +580,15 @@ function AgentStep({ agent, status, index, expanded, onToggle, compact = false }
             <p className="text-xs text-gray-500 font-medium mb-1">Task:</p>
             <p className="text-sm text-gray-300">{agent.task}</p>
           </div>
+          
+          {status?.input && (
+            <div>
+              <p className="text-xs text-gray-500 font-medium mb-1">Input (from previous agents):</p>
+              <div className="text-xs text-gray-300 bg-gray-900/50 rounded p-2 font-mono max-h-40 overflow-y-auto">
+                {status.input}
+              </div>
+            </div>
+          )}
           
           {status?.output && (
             <div>

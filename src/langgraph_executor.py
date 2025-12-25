@@ -7,7 +7,8 @@ generates unique agent topologies per query - LangGraph just provides better
 execution infrastructure.
 """
 
-from typing import TypedDict, Dict, Any, List, Optional, Annotated, cast, TYPE_CHECKING
+import logging
+from typing import TypedDict, Dict, Any, List, Optional, Annotated, cast, TYPE_CHECKING, Callable
 from datetime import datetime
 import operator
 from langgraph.graph import StateGraph, END, START
@@ -21,11 +22,38 @@ if TYPE_CHECKING:
     from .meta_coordinator import ExecutionPlan
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def visualize_state(state: Dict[str, Any], title: str = "State Snapshot") -> None:
+    """Visualize the current state in a simple format."""
+    print("\n" + "=" * 80)
+    print(f"  {title}")
+    print("=" * 80)
+    
+    # Show agent_outputs
+    if "agent_outputs" in state:
+        print("\n📦 Agent Outputs:")
+        print("-" * 80)
+        for agent_id, output in state["agent_outputs"].items():
+            output_str = str(output) if output else "(empty)"
+            print(f"  • {agent_id:20s} | Length: {len(output_str):6d} | Preview: {output_str[:60]}...")
+        print("-" * 80)
+    
+    # Show other state info
+    print("\nℹ️  State Info:")
+    print("-" * 80)
+    print(f"  Query:               {state.get('query', 'N/A')[:80]}")
+    print(f"  Current Layer:       {state.get('current_layer', 'N/A')}")
+    print(f"  Total Layers:        {state.get('total_layers', 'N/A')}")
+    print(f"  Conversation Steps:  {len(state.get('conversation_history', []))}")
+    print(f"  Execution Traces:    {len(state.get('execution_trace', []))}")
+    print("-" * 80)
+    print("")
 
 def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two dictionaries for LangGraph state updates."""
@@ -63,6 +91,7 @@ class MagenticState(TypedDict):
     
     # Agent communication
     messages: Annotated[List[BaseMessage], operator.add]  # For inter-agent messages
+    conversation_history: Annotated[List[Dict[str, str]], operator.add]  # Chat history per step
     
     # Metadata
     session_id: str
@@ -162,6 +191,11 @@ class MagenticGraphBuilder:
             """Execute this agent and update state."""
             console.print(f"\n[yellow]→ Executing {agent_id} ({role})...[/yellow]")
             
+            # Optional: Visualize state before execution (set env var DEBUG_STATE=true to enable)
+            import os
+            if os.getenv("DEBUG_STATE", "").lower() == "true":
+                visualize_state(dict(state), f"State BEFORE {agent_id}")
+            
             # Get this agent's layer and index from mapping
             agent_info = state.get("agent_to_layer", {}).get(agent_id, {'layer': 0, 'index': 0})
             agent_layer = agent_info['layer']
@@ -171,13 +205,22 @@ class MagenticGraphBuilder:
             
             # Gather context from dependencies (depends_on contains agent indices)
             context_parts = []
+            
             for dep_idx in depends_on:
                 # Generate the dependency agent's ID from its index and role
                 dep_agent_id = f"{all_agents[dep_idx]['role']}_{dep_idx}"
                 if dep_agent_id in state["agent_outputs"]:
                     dep_output = state["agent_outputs"][dep_agent_id]
-                    context_parts.append(f"From {dep_agent_id}:\n{dep_output}")
-                    console.print(f"  [dim]Using output from {dep_agent_id}[/dim]")
+                    
+                    # Ensure dep_output is a string and not empty
+                    if dep_output is None or (isinstance(dep_output, str) and dep_output.strip() == ""):
+                        console.print(f"  [red]WARNING: {dep_agent_id} output is empty![/red]")
+                        output_str = "(no output from previous agent)"
+                    else:
+                        output_str = str(dep_output).strip()  # STRIP leading/trailing whitespace
+                        console.print(f"  [cyan]Using {dep_agent_id}: {len(output_str)} chars[/cyan]")
+                    
+                    context_parts.append(f"From {dep_agent_id}:\n{output_str}")
             
             # Pass dependency outputs (empty string means no prior agent outputs)
             context = "\n\n".join(context_parts)
@@ -185,36 +228,71 @@ class MagenticGraphBuilder:
             # Execute agent using meta_system
             try:
                 console.print(f"  [dim]Task: {task[:80]}...[/dim]")
+                
+                # Pass conversation history for context
+                conversation_history = state.get("conversation_history", [])
+                
                 result = await self.meta_system.execute_agent_for_langgraph(
                     agent_id=agent_id,
                     role=role,
                     task=task,
                     context=context,
-                    original_query=state["query"],  # Pass the actual user query
+                    original_query=state["query"],
                     layer=agent_layer,
                     total_layers=total_layers,
-                    agent_number=agent_idx + 1,  # 1-indexed for display
-                    total_agents=total_agents
+                    agent_number=agent_idx + 1,
+                    total_agents=total_agents,
+                    conversation_history=conversation_history
                 )
                 
-                console.print(f"[green]✓ {agent_id} completed ({len(str(result))} chars)[/green]")
+                # Result is a dict with 'content' and 'tool_calls'
+                output_content = result.get("content", str(result)) if isinstance(result, dict) else str(result)
                 
-                # Update state
-                return {
-                    "agent_outputs": {agent_id: result},
-                    "current_layer": agent_layer,  # Update to this agent's layer
+                if not output_content or output_content.strip() == "":
+                    console.print(f"[red]WARNING: Agent {agent_id} produced EMPTY output![/red]")
+                    output_content = f"[ERROR: Agent {agent_id} produced no output]"
+                
+                console.print(f"[green]✓ {agent_id} completed ({len(output_content)} chars)[/green]")
+                
+                # Create conversation history entry for this step
+                conversation_entry = {
+                    "agent_id": agent_id,
+                    "role": role,
+                    "task": task,
+                    "input_context": context[:500] if context else "(no previous context)",
+                    "output": output_content[:500],
+                    "layer": agent_layer,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # Update state - store the content for dependency passing
+                state_update = {
+                    "agent_outputs": {agent_id: output_content},
+                    "current_layer": agent_layer,
+                    "conversation_history": [conversation_entry],
                     "execution_trace": [{
                         "agent_id": agent_id,
                         "role": role,
                         "layer": agent_layer,
                         "timestamp": datetime.now().isoformat(),
                         "status": "completed",
-                        "output_length": len(str(result))
+                        "output_length": len(output_content)
                     }]
                 }
+                
+                # Optional: Visualize state after execution
+                import os
+                if os.getenv("DEBUG_STATE", "").lower() == "true":
+                    temp_state = {**state, **state_update}
+                    visualize_state(temp_state, f"State AFTER {agent_id}")
+                
+                return state_update
             
             except Exception as e:
+                logger.error(f"Error in {agent_id}: {e}", exc_info=True)
                 console.print(f"[red]Error in {agent_id}: {e}[/red]")
+                import traceback
+                traceback.print_exc()
                 return {
                     "agent_outputs": {agent_id: f"Error: {str(e)}"},
                     "execution_trace": [{
@@ -228,18 +306,50 @@ class MagenticGraphBuilder:
         
         return agent_node
     
+    def _create_layer_barrier(self, layer_num: int, layer_agents: List[int], agents: List[Dict]) -> Callable:
+        """
+        Create a barrier node that waits for ALL agents in a layer to complete.
+        
+        This prevents race conditions where the first agent to finish triggers
+        the next layer before other parallel agents have stored their outputs.
+        """
+        def layer_barrier(state: MagenticState) -> MagenticState:
+            """Wait for all agents in this layer to complete."""
+            # Check if all agents in this layer have outputs
+            all_complete = True
+            for agent_idx in layer_agents:
+                agent_id = f"{agents[agent_idx]['role']}_{agent_idx}"
+                if agent_id not in state["agent_outputs"]:
+                    all_complete = False
+                    console.print(f"  [yellow]Layer {layer_num} barrier: waiting for {agent_id}[/yellow]")
+                    break
+            
+            if all_complete:
+                console.print(f"  [green]✓ Layer {layer_num} complete - all {len(layer_agents)} agents finished[/green]")
+            
+            # Return state unchanged - barrier just synchronizes
+            return state
+        
+        return layer_barrier
+    
     def _add_dynamic_edges(self, graph: StateGraph, agents: List[Dict], layers: List[List[int]]):
         """
         Add edges to graph based on AI-generated dependency structure.
         
-        This creates the execution flow dynamically:
-        - Agents with no dependencies connect from START
-        - Dependencies create edges between agents
-        - Final agents connect to END
+        This creates the execution flow dynamically with layer barriers:
+        - START → Layer 0 agents → Barrier 0 → Layer 1 agents → Barrier 1 → ... → END
+        - Barriers ensure all agents in a layer complete before next layer starts
         """
         # Helper to generate agent ID from index
         def get_agent_id(idx: int) -> str:
             return f"{agents[idx]['role']}_{idx}"
+        
+        # Add barrier nodes for each layer (except the last)
+        for layer_num in range(len(layers) - 1):
+            barrier_name = f"barrier_layer_{layer_num}"
+            barrier_func = self._create_layer_barrier(layer_num, layers[layer_num], agents)
+            graph.add_node(barrier_name, barrier_func)
+            console.print(f"  Added barrier: {barrier_name}")
         
         # Layer 0 agents (no dependencies) connect from START
         if layers:
@@ -248,16 +358,27 @@ class MagenticGraphBuilder:
                 graph.add_edge(START, agent_id)
                 console.print(f"  Edge: START → {agent_id}")
         
-        # Add edges based on dependencies
-        for idx, agent in enumerate(agents):
-            agent_id = get_agent_id(idx)
-            depends_on = agent.get("depends_on", [])
+        # Connect each layer:
+        # Layer agents → barrier → next layer agents
+        for layer_num in range(len(layers)):
+            current_layer_agents = layers[layer_num]
             
-            # If has dependencies, connect from each dependency
-            for dep_idx in depends_on:
-                dep_id = get_agent_id(dep_idx)
-                graph.add_edge(dep_id, agent_id)
-                console.print(f"  Edge: {dep_id} → {agent_id}")
+            # If not the last layer, connect agents to barrier
+            if layer_num < len(layers) - 1:
+                barrier_name = f"barrier_layer_{layer_num}"
+                
+                # All agents in current layer connect to barrier
+                for agent_idx in current_layer_agents:
+                    agent_id = get_agent_id(agent_idx)
+                    graph.add_edge(agent_id, barrier_name)
+                    console.print(f"  Edge: {agent_id} → {barrier_name}")
+                
+                # Barrier connects to all agents in next layer
+                next_layer_agents = layers[layer_num + 1]
+                for agent_idx in next_layer_agents:
+                    agent_id = get_agent_id(agent_idx)
+                    graph.add_edge(barrier_name, agent_id)
+                    console.print(f"  Edge: {barrier_name} → {agent_id}")
         
         # Last layer agents connect to END
         if layers:
@@ -286,6 +407,7 @@ class MagenticGraphBuilder:
             total_layers=0,  # Will be set after graph build
             agent_to_layer={},  # Will be set after graph build
             messages=[],
+            conversation_history=[],
             session_id=session_id,
             start_time=datetime.now().isoformat(),
             final_output=None

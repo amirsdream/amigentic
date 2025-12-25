@@ -46,6 +46,9 @@ class Config:
         self.log_file: str = os.getenv("LOG_FILE", "agent.log")
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
         self.max_parallel_agents: int = int(os.getenv("MAX_PARALLEL_AGENTS", "3"))
+        
+        # UI Display settings
+        self.ui_display_limit: int = int(os.getenv("UI_DISPLAY_LIMIT", "200"))
 
     def validate(self) -> tuple[bool, Optional[str]]:
         """Validate configuration values.
@@ -75,6 +78,9 @@ class Config:
         
         if self.max_parallel_agents < 1:
             return False, "MAX_PARALLEL_AGENTS must be positive"
+        
+        if self.ui_display_limit < 50:
+            return False, "UI_DISPLAY_LIMIT must be at least 50 characters"
         
         return True, None
 

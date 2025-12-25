@@ -309,12 +309,19 @@ async def process_query_with_updates(websocket: WebSocket, query: str, username:
         # Create execution plan
         plan = meta_system.coordinator.create_execution_plan(query)
         
+        # Compute layers for each agent
+        layers = plan.get_execution_layers()
+        agent_to_layer = {}
+        for layer_idx, layer_agents in enumerate(layers):
+            for agent_idx in layer_agents:
+                agent_to_layer[agent_idx] = layer_idx
+        
         # Convert plan to dict for database storage
         plan_dict = {
             "description": plan.description,
             "agents": plan.agents,
             "total_agents": len(plan.agents),
-            "total_layers": len(plan.get_execution_layers())
+            "total_layers": len(layers)
         }
         
         # Send plan
@@ -327,12 +334,12 @@ async def process_query_with_updates(websocket: WebSocket, query: str, username:
                         "agent_id": f"{agent.get('role')}_{idx}",
                         "role": agent.get("role"),
                         "task": agent.get("task"),
-                        "layer": agent.get("layer", 0)
+                        "layer": agent_to_layer.get(idx, 0)
                     }
                     for idx, agent in enumerate(plan.agents)
                 ],
                 "total_agents": len(plan.agents),
-                "total_layers": len(plan.get_execution_layers())
+                "total_layers": len(layers)
             }
         })
         
@@ -345,6 +352,9 @@ async def process_query_with_updates(websocket: WebSocket, query: str, username:
         
         # Execute with custom callback for progress
         result = await execute_with_progress(websocket, query)
+        
+        # Wait to ensure all agent_complete events are sent before the final complete event
+        await asyncio.sleep(0.2)
         
         final_output = result.get("final_output", "")
         session_id = result.get("session_id", "")
@@ -395,43 +405,82 @@ async def execute_with_progress(websocket: WebSocket, query: str) -> Dict[str, A
         agent_id = kwargs.get("agent_id", args[0] if args else "unknown")
         role = kwargs.get("role", args[1] if len(args) > 1 else "unknown")
         task = kwargs.get("task", args[2] if len(args) > 2 else "")
+        context = kwargs.get("context", args[3] if len(args) > 3 else "")
         
         # Send agent start
-        await websocket.send_json({
-            "type": "agent_start",
-            "data": {
-                "agent_id": agent_id,
-                "role": role,
-                "task": task
-            }
-        })
+        logger.info(f"Sending agent_start event for {agent_id} ({role})")
+        try:
+            await websocket.send_json({
+                "type": "agent_start",
+                "data": {
+                    "agent_id": agent_id,
+                    "role": role,
+                    "task": task,
+                    "input": context[:config.ui_display_limit] if context else "(No previous agent outputs)"
+                }
+            })
+        except Exception as e:
+            logger.error(f"Failed to send agent_start event: {e}")
+            # Continue anyway
         
         # Execute agent
-        result = await original_execute(*args, **kwargs)
-        
-        # Extract tool calls if available
-        tool_calls: List[Any] = []
         try:
-            if hasattr(result, 'tool_calls') and result.tool_calls:  # type: ignore
-                tool_calls = result.tool_calls  # type: ignore
-            elif isinstance(result, dict):
-                if 'tool_calls' in result:
-                    tool_calls = result['tool_calls']  # type: ignore
-        except Exception:
-            # Ignore errors extracting tool calls
-            pass
+            result = await original_execute(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Agent {agent_id} execution failed: {e}", exc_info=True)
+            # Send error event
+            try:
+                await websocket.send_json({
+                    "type": "agent_complete",
+                    "data": {
+                        "agent_id": agent_id,
+                        "role": role,
+                        "input": context[:config.ui_display_limit] if context else "(No previous agent outputs)",
+                        "output": f"[ERROR: {str(e)[:config.ui_display_limit]}]",
+                        "output_length": len(str(e)),
+                        "tool_calls": [],
+                        "error": True
+                    }
+                })
+            except Exception as ws_error:
+                logger.error(f"Failed to send error event: {ws_error}")
+            # Return error as dict to maintain consistency
+            return {"content": f"[ERROR: {str(e)}]", "tool_calls": []}
+        
+        # Debug logging
+        logger.info(f"Agent {agent_id} result type: {type(result)}")
+        
+        # Extract content and tool calls from result dict
+        if isinstance(result, dict):
+            output_str = result.get("content", str(result))
+            tool_calls = result.get("tool_calls", [])
+            logger.info(f"Agent {agent_id} has {len(tool_calls)} tool calls")
+        else:
+            # Fallback for string results
+            output_str = str(result)
+            tool_calls = []
+            logger.warning(f"Agent {agent_id} returned non-dict result: {type(result)}")
+        
+        logger.info(f"Agent {agent_id} output: {output_str[:500]}")
         
         # Send agent complete with full output
-        await websocket.send_json({
-            "type": "agent_complete",
-            "data": {
-                "agent_id": agent_id,
-                "role": role,
-                "output": str(result)[:1000],  # Limit to first 1000 chars
-                "output_length": len(str(result)),
-                "tool_calls": tool_calls
-            }
-        })
+        logger.info(f"Sending agent_complete event for {agent_id} with {len(tool_calls)} tool calls")
+        try:
+            await websocket.send_json({
+                "type": "agent_complete",
+                "data": {
+                    "agent_id": agent_id,
+                    "role": role,
+                    "input": context[:config.ui_display_limit] if context else "(No previous agent outputs)",
+                    "output": output_str[:config.ui_display_limit],
+                    "output_length": len(output_str),
+                    "tool_calls": tool_calls
+                }
+            })
+            logger.info(f"✓ Successfully sent agent_complete for {agent_id}")
+        except Exception as e:
+            logger.error(f"Failed to send agent_complete event: {e}")
+            # Continue anyway
         
         return result
     

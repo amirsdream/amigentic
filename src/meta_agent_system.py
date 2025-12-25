@@ -3,7 +3,7 @@
 import logging
 import json
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -281,7 +281,10 @@ class MetaAgentSystem:
             return f"[ERROR: {error_msg}]"
         
         # Execute agent
-        output = self._execute_agent(role, task, query, previous_outputs, depth=depth, max_depth=max_depth)
+        result = self._execute_agent(role, task, query, previous_outputs, [], depth=depth, max_depth=max_depth)
+        
+        # Extract content from dict result
+        output = result.get("content", str(result)) if isinstance(result, dict) else str(result)
         
         # Update trace
         trace.append({
@@ -443,11 +446,14 @@ class MetaAgentSystem:
         
         # Execute in thread pool to avoid blocking (LLM calls are blocking)
         loop = asyncio.get_event_loop()
-        output = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             self._execute_agent,
-            role, task, query, previous_outputs, depth, max_depth
+            role, task, query, previous_outputs, [], depth, max_depth
         )
+        
+        # Extract content from dict result
+        output = result.get("content", str(result)) if isinstance(result, dict) else str(result)
         
         logger.info(f"✅ [PARALLEL] Agent {agent_index} completed: {role_name.upper()}")
         
@@ -463,8 +469,9 @@ class MetaAgentSystem:
         layer: int = 0,
         total_layers: int = 1,
         agent_number: int = 1,
-        total_agents: int = 1
-    ) -> str:
+        total_agents: int = 1,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
         """Execute a single agent for LangGraph integration.
         
         This is a simplified async interface for LangGraph nodes.
@@ -481,13 +488,13 @@ class MetaAgentSystem:
             total_agents: Total number of agents
             
         Returns:
-            Agent output
+            Dict with 'content' (agent's text output) and 'tool_calls' (list of tools used)
         """
         # Get role definition
         role_obj = self.role_library.get_role(role)
         if not role_obj:
             logger.error(f"Unknown role: {role}")
-            return f"[ERROR: Unknown role '{role}']"
+            return {"content": f"[ERROR: Unknown role '{role}']", "tool_calls": []}
         
         # Display progress
         self.visualizer.display_execution_progress(
@@ -503,27 +510,71 @@ class MetaAgentSystem:
         # Parse context to extract previous outputs
         previous_outputs = []
         if context:
+            logger.info(f"Agent {agent_id} received context: {context[:500]}...")
+            logger.info(f"Context raw repr: {repr(context[:200])}")
+            
             # Context format: "From agent_id:\noutput\n\nFrom agent_id2:\noutput2"
+            # Split by double newline to separate different agents
             parts = context.split("\n\n")
-            for part in parts:
+            logger.info(f"Context split into {len(parts)} parts")
+            
+            for i, part in enumerate(parts):
+                part = part.strip()
+                if not part:
+                    logger.debug(f"Part {i} is empty, skipping")
+                    continue
+                
+                logger.info(f"Processing part {i}: {part[:100]}...")
+                    
                 if part.startswith("From "):
-                    # Extract the output part
-                    lines = part.split("\n", 1)
-                    if len(lines) > 1:
-                        previous_outputs.append(lines[1])
+                    # Try multiple parsing strategies
+                    # Strategy 1: Split on ":\n" (preferred format)
+                    if ":\n" in part:
+                        header, output = part.split(":\n", 1)
+                        if output:
+                            previous_outputs.append(output)
+                            logger.info(f"Extracted output from {header} (strategy 1): {output[:200]}...")
+                        else:
+                            logger.warning(f"Part has 'From' header but empty output: {part[:100]}")
+                    # Strategy 2: Split on ":" and check if there's content after
+                    elif ":" in part:
+                        header, rest = part.split(":", 1)
+                        rest = rest.strip()
+                        if rest:
+                            previous_outputs.append(rest)
+                            logger.info(f"Extracted output from {header} (strategy 2): {rest[:200]}...")
+                        else:
+                            logger.warning(f"Part has 'From' and ':' but no content after: {part[:100]}")
+                    else:
+                        logger.warning(f"Part starts with 'From' but has no colon: {part[:100]}")
+                else:
+                    # Might be continuation or different format - add as-is if non-empty
+                    if part and not part.startswith("Original question:") and not part.startswith("==="):
+                        logger.info(f"Adding non-standard part as context: {part[:100]}...")
+                        previous_outputs.append(part)
+            logger.info(f"Total previous outputs extracted: {len(previous_outputs)}")
+        else:
+            logger.info(f"Agent {agent_id} has no context (first agent)")
+        
+        # Add conversation history context if available
+        if conversation_history:
+            logger.info(f"Agent {agent_id} has access to {len(conversation_history)} previous conversation steps")
+        
+        # Ensure conversation_history is a list (not None) for thread pool
+        conv_hist = conversation_history if conversation_history is not None else []
         
         # Execute in thread pool
         loop = asyncio.get_event_loop()
-        output = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             self._execute_agent,
-            role_obj, task, original_query, previous_outputs, 0, 3
+            role_obj, task, original_query, previous_outputs, conv_hist, 0, 3
         )
         
         logger.info(f"✅ {agent_id} ({role}) completed")
-        return output
+        return result
     
-    def _execute_agent(self, role, task: str, original_query: str, previous_outputs: List[str], depth: int = 0, max_depth: int = 3) -> str:
+    def _execute_agent(self, role, task: str, original_query: str, previous_outputs: List[str], conversation_history: Optional[List[Dict[str, str]]] = None, depth: int = 0, max_depth: int = 3) -> Dict[str, Any]:
         """Execute a single agent.
         
         Args:
@@ -535,12 +586,20 @@ class MetaAgentSystem:
             max_depth: Maximum execution depth for this query.
             
         Returns:
-            Agent's output.
+            Dict with 'content' (agent's text output) and 'tool_calls' (list of tools used).
         """
         # Build context
         context_parts = [f"Original question: {original_query}"]
         
-        # Add conversation history if available
+        # Add conversation history from previous steps if available
+        if conversation_history:
+            context_parts.append("\n=== Previous Agent Conversation Steps ===")
+            for i, step in enumerate(conversation_history[-3:], 1):  # Last 3 steps for context
+                context_parts.append(f"\nStep {i} - {step.get('role', 'unknown')} ({step.get('agent_id', '')}):") 
+                context_parts.append(f"  Task: {step.get('task', '')[:100]}")
+                context_parts.append(f"  Output: {step.get('output', '')[:200]}...")
+        
+        # Add user conversation history if available (from meta_system.conversation_history)
         if self.conversation_history:
             context_parts.append("\nConversation history (recent):")
             # Last 2 exchanges (4 messages)
@@ -551,20 +610,27 @@ class MetaAgentSystem:
                 context_parts.append(f"  {role_label}: {content}")
         
         if previous_outputs:
+            logger.info(f"Agent has {len(previous_outputs)} previous outputs to incorporate")
             context_parts.append("\n=== Outputs from Previous Agents ===")
             for i, output in enumerate(previous_outputs, 1):
                 # Truncate if very long
                 output_display = output[:500] + "..." if len(output) > 500 else output
                 context_parts.append(f"\nAgent {i} output:\n{output_display}")
+                logger.info(f"Adding previous output {i}: {output[:200]}...")
         else:
+            logger.info("Agent is the first agent - no previous outputs")
             context_parts.append("\n=== You are the first agent ===")
             context_parts.append("No prior agent outputs available yet.")
         
         context = "\n".join(context_parts)
+        logger.info(f"Built context for agent (length: {len(context)})")
         
-        # Build messages
-        system_msg = SystemMessage(content=role.system_prompt)
+        # Build messages with output length constraint
+        output_limit_instruction = f"\n\nIMPORTANT: Keep your response concise and under {self.config.ui_display_limit} characters. Be direct and focused."
+        system_msg = SystemMessage(content=role.system_prompt + output_limit_instruction)
         task_msg = HumanMessage(content=f"{context}\n\nYour task: {task}")
+        
+        logger.info(f"Task message content (first 500 chars): {task_msg.content[:500]}...")
         
         # Check if agent can and should delegate
         if role.can_delegate and depth < max_depth:
@@ -585,6 +651,8 @@ If this task would benefit from delegation, respond with JSON:
 }}
 
 Otherwise, complete the task directly and respond with your normal output (not JSON).
+
+IMPORTANT: If completing directly, keep your response under {self.config.ui_display_limit} characters - be concise and focused.
 """
             task_msg = HumanMessage(content=delegation_prompt)
         
@@ -607,7 +675,7 @@ Otherwise, complete the task directly and respond with your normal output (not J
                 logger.error(f"⚠️ {role.name} needs tools but no tools are available!")
                 logger.warning(f"Falling back to LLM without tools")
                 response = self.llm.invoke([system_msg, task_msg], config=config)
-                return str(response.content)
+                return {"content": str(response.content), "tool_calls": []}
             
             # Special handling for researcher role - more reliable than tool calling
             if role.name == "researcher":
@@ -616,7 +684,9 @@ Otherwise, complete the task directly and respond with your normal output (not J
                 # First, ask the LLM what to search for
                 search_prompt = SystemMessage(content=f"""You are a research specialist planning a web search.
 Based on the task, provide 1-3 search queries (one per line) that would give the best results.
-Just output the search queries, nothing else. No explanations, no numbering.""")
+Just output the search queries, nothing else. No explanations, no numbering.
+
+IMPORTANT: Keep search queries short and focused.""")
                 
                 search_response = self.llm.invoke([search_prompt, task_msg], config=config)
                 search_queries = str(search_response.content).strip().split('\n')
@@ -637,7 +707,7 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                     logger.error(f"   └─ No DuckDuckGo search tool found! Available: {[t.name for t in self.tools]}")
                     logger.warning(f"   └─ Falling back to LLM without search")
                     response = self.llm.invoke([system_msg, task_msg], config=config)
-                    return str(response.content)
+                    return {"content": str(response.content), "tool_calls": []}
                 
                 for query in search_queries:
                     # Clean query (remove numbering, bullets, etc.)
@@ -676,7 +746,7 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                     final_response = self.llm.invoke([
                         system_msg,
                         task_msg,
-                        AIMessage(content=f"Based on these search results:\n\n{tool_context}\n\nProvide a comprehensive research summary.")
+                        AIMessage(content=f"Based on these search results:\n\n{tool_context}\n\nProvide a comprehensive research summary. Keep it under {self.config.ui_display_limit} characters - be concise and focused on key findings.")
                     ], config=config)
                     
                     # Debug: check response structure
@@ -696,13 +766,17 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                         result_content = str(fallback.content)
                         logger.info(f"✅ Fallback response: {len(result_content)} chars")
                     
-                    return result_content
+                    # Return dict with content and tool info for researcher
+                    return {
+                        "content": result_content,
+                        "tool_calls": [{"name": "duckduckgo_search", "args": {"query": q}} for q in search_queries]
+                    }
                 else:
                     logger.warning(f"⚠️ No search results obtained, providing answer without search")
                     response = self.llm.invoke([system_msg, task_msg], config=config)
                     result_content = str(response.content)
                     logger.info(f"✅ {role.name} generated fallback response: {len(result_content)} chars")
-                    return result_content
+                    return {"content": result_content, "tool_calls": []}
             
             # Fallback to standard tool calling for other tool-enabled roles
             llm_with_tools = self.llm.bind_tools(self.tools)
@@ -714,6 +788,9 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 logger.info(f"🔍 {role.name} is calling {len(response.tool_calls)} tool(s)")
                 
+                # Store tool calls for later reporting
+                recorded_tool_calls = []
+                
                 # Execute tools
                 tool_results = []
                 for tool_call in response.tool_calls:
@@ -724,6 +801,9 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                     else:
                         tool_name = getattr(tool_call, 'name', None) or getattr(tool_call, 'type', 'unknown')
                         tool_args = getattr(tool_call, 'args', None) or getattr(tool_call, 'arguments', {})
+                    
+                    # Record this tool call
+                    recorded_tool_calls.append({"name": tool_name, "args": tool_args})
                     
                     logger.info(f"   └─ Tool: {tool_name}")
                     logger.info(f"   └─ Args: {tool_args}")
@@ -778,9 +858,12 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                         task_msg,
                         AIMessage(content=f"Based on these search results:\n\n{tool_context}\n\nProvide a comprehensive answer.")
                     ], config=final_config)
-                    return str(final_response.content)
+                    return {
+                        "content": str(final_response.content),
+                        "tool_calls": recorded_tool_calls
+                    }
             
-            return str(response.content)
+            return {"content": str(response.content), "tool_calls": []}
         else:
             response = self.llm.invoke([system_msg, task_msg], config=config)
             response_content = str(response.content)
@@ -818,12 +901,12 @@ Sub-agent results:
 Combine these results to complete your original task.""")
                             
                             final_response = self.llm.invoke([system_msg, synthesis_msg], config=config)
-                            return str(final_response.content)
+                            return {"content": str(final_response.content), "tool_calls": []}
                 except json.JSONDecodeError:
                     # Not JSON, return as-is
                     pass
             
-            return response_content
+            return {"content": response_content, "tool_calls": []}
     
     def _build_context(self) -> str:
         """Build conversation context from history.
