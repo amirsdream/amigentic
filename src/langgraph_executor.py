@@ -112,8 +112,6 @@ class MagenticGraphBuilder:
         agents = execution_plan.agents
         layers = execution_plan.get_execution_layers()
         
-        console.print(f"[cyan]Building dynamic graph with {len(agents)} agents in {len(layers)} layers[/cyan]")
-        
         # Build mapping of agent_id to (layer_num, agent_idx)
         agent_to_layer = {}
         for layer_num, layer_agents in enumerate(layers):
@@ -132,13 +130,10 @@ class MagenticGraphBuilder:
         # Add agent nodes dynamically
         for idx, agent_config in enumerate(agents):
             agent_id = f"{agent_config['role']}_{idx}"
-            role = agent_config["role"]
             
             # Create node function for this agent
             node_func = self._create_agent_node(agent_id, agent_config, agents)
             graph.add_node(agent_id, node_func)
-            
-            console.print(f"  Added node: {agent_id} (role={role})")
         
         # Add edges based on dependencies
         self._add_dynamic_edges(graph, agents, layers)
@@ -146,7 +141,6 @@ class MagenticGraphBuilder:
         # Compile with checkpointing
         compiled = graph.compile(checkpointer=self.checkpointer)
         
-        console.print("[green]✓ Dynamic graph compiled successfully[/green]")
         return compiled
     
     def _create_agent_node(self, agent_id: str, agent_config: Dict[str, Any], all_agents: List[Dict]):
@@ -185,7 +179,8 @@ class MagenticGraphBuilder:
                     context_parts.append(f"From {dep_agent_id}:\n{dep_output}")
                     console.print(f"  [dim]Using output from {dep_agent_id}[/dim]")
             
-            context = "\n\n".join(context_parts) if context_parts else "No dependencies"
+            # Pass dependency outputs (empty string means no prior agent outputs)
+            context = "\n\n".join(context_parts)
             
             # Execute agent using meta_system
             try:
@@ -195,6 +190,7 @@ class MagenticGraphBuilder:
                     role=role,
                     task=task,
                     context=context,
+                    original_query=state["query"],  # Pass the actual user query
                     layer=agent_layer,
                     total_layers=total_layers,
                     agent_number=agent_idx + 1,  # 1-indexed for display
@@ -335,43 +331,34 @@ class LangGraphExecutor:
         Returns:
             Dict with final_output, execution_trace, and metadata
         """
-        console.print(f"\n[bold cyan]{'='*70}[/bold cyan]")
-        console.print(f"[bold cyan]QUERY:[/bold cyan] {query}")
-        console.print(f"[bold cyan]{'='*70}[/bold cyan]\n")
-        
         # Step 1: AI generates dynamic plan
-        console.print("[bold]Step 1: AI Coordinator Planning[/bold]")
+        console.print("[cyan]→ AI Coordinator analyzing query...[/cyan]")
         execution_plan = self.meta_system.coordinator.create_execution_plan(query)
+        console.print(f"[green]✓ Plan created: {len(execution_plan.agents)} agents in {len(execution_plan.get_execution_layers())} layers[/green]")
         
         # Step 2: Build dynamic graph from AI plan
-        console.print("\n[bold]Step 2: Building Dynamic Graph[/bold]")
+        console.print("[cyan]→ Building execution graph...[/cyan]")
         graph = self.graph_builder.build_dynamic_graph(execution_plan)
         
         # Step 3: Create initial state
-        console.print("\n[bold]Step 3: Initializing State[/bold]")
         initial_state = self.graph_builder.create_initial_state(query)
         initial_state["total_layers"] = self.graph_builder.total_layers
         initial_state["agent_to_layer"] = self.graph_builder.agent_to_layer
+        console.print(f"[green]✓ Graph ready[/green]\n")
         
         # Step 4: Execute with checkpointing
-        console.print("\n[bold]Step 4: Executing Graph[/bold]")
-        console.print(f"[dim]Session: {initial_state['session_id']}[/dim]\n")
         config: RunnableConfig = {"configurable": {"thread_id": initial_state["session_id"]}}  # type: ignore
         
         if stream:
             # Stream execution
             final_state: Optional[MagenticState] = None
             async for update in graph.astream(initial_state, config):
-                console.print(f"[dim]Update: {list(update.keys())}[/dim]")
                 final_state = update  # type: ignore
         else:
             # Batch execution
-            console.print("[dim]Starting batch execution...[/dim]")
             final_state = await graph.ainvoke(initial_state, config)  # type: ignore
-            console.print("[dim]Batch execution completed[/dim]")
         
-        # Step 5: Compile final result
-        console.print("\n[bold green]Execution Complete![/bold green]")
+        console.print("\n[bold green]✓ Complete![/bold green]\n")
         
         # Get final agent output (last agent in execution)
         final_output = ""
@@ -380,6 +367,10 @@ class LangGraphExecutor:
             if outputs:
                 # Get last output
                 final_output = list(outputs.values())[-1]
+        
+        # Update conversation history in meta_system
+        self.meta_system.conversation_history.append({"role": "user", "content": query})
+        self.meta_system.conversation_history.append({"role": "assistant", "content": final_output})
         
         return {
             "query": query,

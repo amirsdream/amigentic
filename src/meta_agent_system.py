@@ -9,7 +9,16 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
+from langchain_core.language_models import BaseChatModel
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
+
+try:
+    from langchain_anthropic import ChatAnthropic  # type: ignore[import-not-found]
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+    ChatAnthropic = None  # type: ignore[assignment,misc]
 
 from .config import Config
 from .meta_coordinator import MetaCoordinator
@@ -31,12 +40,15 @@ class MetaAgentSystem:
         """
         self.config = config
         self.tools = tools
-        self.coordinator = MetaCoordinator(config)
         self.role_library = RoleLibrary()
-        self.llm = ChatOllama(
-            model=config.ollama_model,
-            temperature=config.ollama_temperature
-        )
+        
+        # Initialize LLM based on provider
+        self.llm = self._initialize_llm(config)
+        logger.info(f"✓ Initialized {config.llm_provider} LLM: {self.llm.__class__.__name__}")
+        
+        # Initialize coordinator with the configured LLM
+        self.coordinator = MetaCoordinator(config, self.llm)
+        
         # Conversation memory
         self.conversation_history: List[Dict[str, str]] = []
         # Visualization
@@ -46,6 +58,50 @@ class MetaAgentSystem:
         # Concurrency control - limit parallel agents to prevent system overload
         self.max_parallel_agents = config.max_parallel_agents
         self._semaphore = asyncio.Semaphore(self.max_parallel_agents)
+    
+    def _initialize_llm(self, config: Config) -> BaseChatModel:
+        """Initialize the appropriate LLM based on configuration.
+        
+        Args:
+            config: Application configuration
+            
+        Returns:
+            Initialized LLM instance
+        """
+        logger.info(f"🔧 Initializing LLM with provider: {config.llm_provider}")
+        
+        if config.llm_provider == "ollama":
+            logger.info(f"   Using Ollama model: {config.ollama_model} at {config.ollama_base_url}")
+            return ChatOllama(
+                model=config.ollama_model,
+                base_url=config.ollama_base_url,
+                temperature=config.llm_temperature
+            )
+        elif config.llm_provider == "openai":
+            logger.info(f"   Using OpenAI model: {config.openai_model}")
+            if not config.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is required when using OpenAI provider")
+            return ChatOpenAI(
+                model=config.openai_model,
+                api_key=config.openai_api_key if config.openai_api_key else None,  # type: ignore
+                temperature=config.llm_temperature
+            )
+        elif config.llm_provider == "claude":
+            logger.info(f"   Using Claude model: {config.anthropic_model}")
+            if not config.anthropic_api_key:
+                raise ValueError("ANTHROPIC_API_KEY is required when using Claude provider")
+            if not HAS_ANTHROPIC or ChatAnthropic is None:
+                raise ImportError(
+                    "langchain-anthropic is not installed. "
+                    "Install it with: pip install langchain-anthropic"
+                )
+            return ChatAnthropic(
+                model=config.anthropic_model,
+                api_key=config.anthropic_api_key if config.anthropic_api_key else None,  # type: ignore
+                temperature=config.llm_temperature
+            )
+        else:
+            raise ValueError(f"Unsupported LLM provider: {config.llm_provider}")
     
     def process_query(self, query: str, depth: int = 0, max_depth: int | None = None) -> Dict[str, Any]:
         """Process a query using dynamic agent creation.
@@ -403,6 +459,7 @@ class MetaAgentSystem:
         role: str,
         task: str,
         context: str,
+        original_query: str,
         layer: int = 0,
         total_layers: int = 1,
         agent_number: int = 1,
@@ -417,6 +474,7 @@ class MetaAgentSystem:
             role: Agent role name
             task: Task for the agent
             context: Context from dependencies
+            original_query: The original user query
             layer: Current layer index
             total_layers: Total number of layers
             agent_number: Agent number in overall sequence (1-indexed)
@@ -444,7 +502,7 @@ class MetaAgentSystem:
         
         # Parse context to extract previous outputs
         previous_outputs = []
-        if context and context != "No dependencies":
+        if context:
             # Context format: "From agent_id:\noutput\n\nFrom agent_id2:\noutput2"
             parts = context.split("\n\n")
             for part in parts:
@@ -459,7 +517,7 @@ class MetaAgentSystem:
         output = await loop.run_in_executor(
             None,
             self._execute_agent,
-            role_obj, task, task, previous_outputs, 0, 3
+            role_obj, task, original_query, previous_outputs, 0, 3
         )
         
         logger.info(f"✅ {agent_id} ({role}) completed")
@@ -493,9 +551,14 @@ class MetaAgentSystem:
                 context_parts.append(f"  {role_label}: {content}")
         
         if previous_outputs:
-            context_parts.append("\nPrevious agent outputs:")
+            context_parts.append("\n=== Outputs from Previous Agents ===")
             for i, output in enumerate(previous_outputs, 1):
-                context_parts.append(f"{i}. {output}")
+                # Truncate if very long
+                output_display = output[:500] + "..." if len(output) > 500 else output
+                context_parts.append(f"\nAgent {i} output:\n{output_display}")
+        else:
+            context_parts.append("\n=== You are the first agent ===")
+            context_parts.append("No prior agent outputs available yet.")
         
         context = "\n".join(context_parts)
         
@@ -539,9 +602,16 @@ Otherwise, complete the task directly and respond with your normal output (not J
         
         # Execute with or without tools
         if role.needs_tools:
+            # Check if tools are available
+            if not self.tools:
+                logger.error(f"⚠️ {role.name} needs tools but no tools are available!")
+                logger.warning(f"Falling back to LLM without tools")
+                response = self.llm.invoke([system_msg, task_msg], config=config)
+                return str(response.content)
+            
             # Special handling for researcher role - more reliable than tool calling
             if role.name == "researcher":
-                logger.info(f"🔍 {role.name} will perform web search")
+                logger.info(f"🔍 {role.name} will perform web search (available tools: {[t.name for t in self.tools]})")
                 
                 # First, ask the LLM what to search for
                 search_prompt = SystemMessage(content=f"""You are a research specialist planning a web search.
@@ -556,10 +626,24 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                 
                 # Execute searches
                 tool_results = []
+                search_tool_found = False
+                for tool in self.tools:
+                    if tool.name in ['duckduckgo_search', 'ddg-search']:
+                        search_tool_found = True
+                        logger.info(f"   └─ Found search tool: {tool.name}")
+                        break
+                
+                if not search_tool_found:
+                    logger.error(f"   └─ No DuckDuckGo search tool found! Available: {[t.name for t in self.tools]}")
+                    logger.warning(f"   └─ Falling back to LLM without search")
+                    response = self.llm.invoke([system_msg, task_msg], config=config)
+                    return str(response.content)
+                
                 for query in search_queries:
                     # Clean query (remove numbering, bullets, etc.)
                     query = query.lstrip('0123456789.-) ').strip()
                     if not query:
+                        logger.warning(f"   └─ Skipping empty query after cleaning")
                         continue
                     
                     for tool in self.tools:
@@ -567,31 +651,58 @@ Just output the search queries, nothing else. No explanations, no numbering.""")
                             try:
                                 logger.info(f"   └─ Searching: {query}")
                                 result = tool.invoke({"query": query})
-                                tool_results.append(result)
-                                logger.info(f"="*60)
-                                logger.info(f"🔍 SEARCH RESULT for '{query}':")
-                                logger.info(f"="*60)
-                                logger.info(result[:500] + "..." if len(result) > 500 else result)
-                                logger.info(f"="*60)
+                                if result:
+                                    tool_results.append(result)
+                                    logger.info(f"="*60)
+                                    logger.info(f"🔍 SEARCH RESULT for '{query}':")
+                                    logger.info(f"="*60)
+                                    logger.info(result[:500] + "..." if len(result) > 500 else result)
+                                    logger.info(f"="*60)
+                                else:
+                                    logger.warning(f"   └─ Search returned empty result for '{query}'")
                             except Exception as e:
                                 logger.error(f"   └─ Search error for '{query}': {e}")
-                                tool_results.append(f"Search failed: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
+                                tool_results.append(f"Search failed for '{query}': {e}")
                             break
                 
                 # Get final response with search results
                 if tool_results:
                     tool_context = "\n\n".join([f"Search result {i+1}:\n{r}" for i, r in enumerate(tool_results)])
                     logger.info(f"📥 {role.name} processing {len(tool_results)} search result(s)")
+                    logger.info(f"📝 Context length: {len(tool_context)} chars")
+                    
                     final_response = self.llm.invoke([
                         system_msg,
                         task_msg,
                         AIMessage(content=f"Based on these search results:\n\n{tool_context}\n\nProvide a comprehensive research summary.")
                     ], config=config)
-                    return str(final_response.content)
+                    
+                    # Debug: check response structure
+                    logger.info(f"🔍 Response type: {type(final_response)}")
+                    logger.info(f"🔍 Response attributes: {dir(final_response)}")
+                    logger.info(f"🔍 Response content type: {type(final_response.content)}")
+                    logger.info(f"🔍 Response content repr: {repr(final_response.content)}")
+                    
+                    result_content = str(final_response.content)
+                    logger.info(f"✅ {role.name} generated response: {len(result_content)} chars")
+                    
+                    if not result_content or len(result_content) == 0:
+                        logger.error(f"❌ LLM returned empty content! Full response: {final_response}")
+                        # Fallback: try without the search context
+                        logger.warning(f"⚠️ Retrying without search context...")
+                        fallback = self.llm.invoke([system_msg, task_msg], config=config)
+                        result_content = str(fallback.content)
+                        logger.info(f"✅ Fallback response: {len(result_content)} chars")
+                    
+                    return result_content
                 else:
                     logger.warning(f"⚠️ No search results obtained, providing answer without search")
                     response = self.llm.invoke([system_msg, task_msg], config=config)
-                    return str(response.content)
+                    result_content = str(response.content)
+                    logger.info(f"✅ {role.name} generated fallback response: {len(result_content)} chars")
+                    return result_content
             
             # Fallback to standard tool calling for other tool-enabled roles
             llm_with_tools = self.llm.bind_tools(self.tools)
@@ -781,60 +892,32 @@ Combine these results to complete your original task.""")
     def _analyze_query_complexity(self, query: str) -> int:
         """Analyze query to determine appropriate max execution depth.
         
+        This is a simple heuristic - the real complexity assessment happens
+        in the LLM coordinator which decides the actual agent topology.
+        
         Args:
             query: User's query.
             
         Returns:
             Recommended max depth (1-5).
         """
-        query_lower = query.lower()
+        # Simple length-based heuristic - let the LLM do the real assessment
+        word_count = len(query.split())
         
-        # Complexity indicators
-        complexity_score = 0
-        
-        # Multi-step indicators
-        multi_step_words = ['plan', 'design', 'create', 'build', 'develop', 'comprehensive', 
-                           'complete', 'detailed', 'step-by-step', 'workflow', 'process',
-                           'strategy', 'roadmap', 'architecture', 'system']
-        complexity_score += sum(2 for word in multi_step_words if word in query_lower)
-        
-        # Comparison/analysis indicators
-        analysis_words = ['compare', 'analyze', 'evaluate', 'assess', 'review', 
-                         'investigate', 'research', 'study', 'examine']
-        complexity_score += sum(1.5 for word in analysis_words if word in query_lower)
-        
-        # Multiple domains
-        if ' and ' in query_lower:
-            complexity_score += len(query_lower.split(' and ')) - 1
-        
-        # Long queries tend to be more complex
-        if len(query.split()) > 20:
-            complexity_score += 2
-        elif len(query.split()) > 10:
-            complexity_score += 1
-        
-        # Questions with multiple parts
-        question_marks = query.count('?')
-        if question_marks > 1:
-            complexity_score += question_marks
-        
-        # Map complexity score to depth with detailed logging
-        if complexity_score >= 8:
-            depth = min(5, self.absolute_max_depth)
-            level = "Very Complex"
-        elif complexity_score >= 5:
-            depth = min(4, self.absolute_max_depth)
-            level = "Complex"
-        elif complexity_score >= 3:
-            depth = min(3, self.absolute_max_depth)
-            level = "Moderate"
-        elif complexity_score >= 1:
-            depth = min(2, self.absolute_max_depth)
+        # Very simple: short, direct questions
+        if word_count < 10:
+            depth = 2
             level = "Simple"
+        # Moderate: typical questions
+        elif word_count < 25:
+            depth = 3
+            level = "Moderate"
+        # Complex: detailed or multi-part questions
         else:
-            depth = 1
-            level = "Very Simple"
+            depth = 4
+            level = "Complex"
         
-        logger.info(f"📊 Complexity: {level} (score: {complexity_score:.1f}) → max_depth: {depth}")
+        logger.info(f"📊 Initial assessment: {level} ({word_count} words) → max_depth: {depth}")
+        logger.info(f"   (LLM coordinator will determine actual agent topology)")
         
         return depth

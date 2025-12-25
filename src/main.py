@@ -7,6 +7,7 @@ passing while preserving the dynamic meta-agent behavior.
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -49,10 +50,38 @@ async def main_async() -> int:
     # Load configuration
     config = Config()
     
-    # Setup observability
+    # Validate configuration
+    is_valid, error_msg = config.validate()
+    if not is_valid:
+        console.print(f"[red]❌ Configuration error: {error_msg}[/red]")
+        console.print("[yellow]Please check your .env file[/yellow]")
+        sys.exit(1)
+    
+    logger.info(f"✓ Configuration loaded: {config}")
+    
+    # Show LLM provider info
+    provider_info = {
+        "ollama": f"[cyan]Ollama[/cyan] (local) - {config.ollama_model}",
+        "openai": f"[cyan]OpenAI[/cyan] - {config.openai_model}",
+        "claude": f"[cyan]Claude[/cyan] - {config.anthropic_model}"
+    }.get(config.llm_provider, "Unknown")
+    
+    console.print(f"🤖 LLM Provider: {provider_info}")
+    console.print(f"🌡️  Temperature: {config.llm_temperature}\n")
+    
+    # Setup observability (optional - system works without it)
     obs_manager = ObservabilityManager(config)
-    obs_manager.setup()
-    logger.info("✓ Observability configured")
+    if config.enable_observability:
+        obs_success = obs_manager.setup()
+        if obs_success:
+            logger.info("✓ Observability configured")
+            console.print(f"[green]✓ Phoenix dashboard: http://localhost:{config.phoenix_port}[/green]")
+        else:
+            logger.info("⚠️  Running without observability")
+            console.print("[yellow]⚠️  Running without observability (Phoenix failed to start)[/yellow]")
+    else:
+        logger.info("ℹ️  Observability disabled (ENABLE_OBSERVABILITY=false)")
+        console.print("[dim]ℹ️  Observability disabled[/dim]")
     
     # Initialize tools
     tool_manager = ToolManager()
@@ -116,7 +145,7 @@ async def main_async() -> int:
                 continue
             
             # Execute with LangGraph
-            console.print("\n[dim]Executing with LangGraph infrastructure...[/dim]\n")
+            console.print("\n[cyan]⚙️  Processing query...[/cyan]")
             result = await langgraph_executor.execute_query(query, stream=False)
             
             # Display result

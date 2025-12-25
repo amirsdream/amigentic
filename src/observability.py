@@ -36,6 +36,7 @@ class ObservabilityManager:
         """
         try:
             # Launch Phoenix app
+            logger.info("Starting Phoenix observability...")
             self.session = px.launch_app()
             
             # Configure OpenTelemetry
@@ -50,11 +51,22 @@ class ObservabilityManager:
             LangChainInstrumentor().instrument()
             self._instrumented = True
             
-            logger.info(f"Phoenix observability started at {self.get_url()}")
+            logger.info(f"✓ Phoenix observability started at {self.get_url()}")
             return True
             
+        except RuntimeError as e:
+            if "Failed to bind" in str(e) or "address" in str(e).lower():
+                logger.warning(f"⚠️  Phoenix failed to start (port conflict): {e}")
+                logger.warning(f"⚠️  Continuing without observability. To fix:")
+                logger.warning(f"   - Kill process using port 4317: lsof -ti:4317 | xargs kill -9")
+                logger.warning(f"   - Or set PHOENIX_GRPC_PORT to a different port")
+            else:
+                logger.error(f"Phoenix error: {e}")
+            return False
+            
         except Exception as e:
-            logger.error(f"Failed to set up observability: {e}")
+            logger.warning(f"⚠️  Failed to set up observability: {e}")
+            logger.warning(f"⚠️  Continuing without observability")
             return False
 
     def get_url(self) -> str:

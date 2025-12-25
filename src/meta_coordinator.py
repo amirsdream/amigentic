@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_ollama import ChatOllama
+from langchain_core.language_models import BaseChatModel
 
 from .config import Config
 from .role_library import RoleLibrary
@@ -96,18 +96,15 @@ class ExecutionPlan:
 class MetaCoordinator:
     """Meta-coordinator that plans and manages dynamic agent execution."""
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, llm: BaseChatModel):
         """Initialize meta-coordinator.
         
         Args:
             config: Application configuration.
+            llm: The configured language model to use.
         """
         self.config = config
-        self.llm = ChatOllama(
-            model=config.ollama_model,
-            temperature=0.3,  # Lower temperature for more consistent JSON output
-            format="json"  # Request JSON format explicitly
-        )
+        self.llm = llm
         self.role_library = RoleLibrary()
     
     def create_execution_plan(self, query: str, conversation_history: str = "", depth: int = 0, max_depth: int = 3) -> ExecutionPlan:
@@ -122,208 +119,45 @@ class MetaCoordinator:
         Returns:
             Execution plan with agents to create and sequence.
         """
-        logger.info(f"📋 Creating execution plan (depth {depth}/{max_depth}) for: {query[:100]}...")
+        logger.info(f"📋 Creating execution plan for: {query[:100]}...")
         
-        # Add complexity hint based on max_depth
-        if max_depth >= 5:
-            complexity_hint = "⚠️ VERY COMPLEX - Use 8-12 agents OR delegate"
-        elif max_depth >= 4:
-            complexity_hint = "⚠️ COMPLEX - Use 6-8 agents"
-        elif max_depth >= 3:
-            complexity_hint = "MODERATE - Use 4-6 agents"
-        elif max_depth >= 2:
-            complexity_hint = "SIMPLE - Use 2-4 agents"
-        else:
-            complexity_hint = "Very simple - 1-2 agents"
-        
-        logger.info(f"💡 Complexity: {complexity_hint}")
-        
-        # Build the planning prompt
-        system_prompt = f"""You are a meta-coordinator creating an execution plan with parallel execution support.
+        # Build the planning prompt - keep it concise for speed
+        system_prompt = f"""You are a meta-coordinator creating execution plans. Output ONLY valid JSON.
 
-COMPLEXITY LEVEL: {complexity_hint}
+Available roles: {', '.join(self.role_library.list_roles())}
 
-{self.role_library.describe_roles()}
+ROLE SELECTION RULES:
+- "researcher": ONLY for web search - current info, facts, news
+- "analyzer": Analysis, explanations, comparisons, breakdowns
+- "writer": Articles, stories, summaries, documentation
+- "coder": ONLY for programming/code tasks
+- "planner": Step-by-step plans, strategies
+- "critic": Review and improve existing content
+- "synthesizer": REQUIRED as final agent when you have 2+ agents
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ STRICT ROLE REQUIREMENTS - READ CAREFULLY ⚠️
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-You MUST use ONLY these exact role names (case-insensitive):
-- researcher
-- analyzer
-- planner
-- writer
-- coder
-- critic
-- synthesizer
-- coordinator
-
-DO NOT invent new roles like "architect", "designer", "engineer", etc.
-DO NOT use roles not in the list above.
-DO NOT create multiple agents with the same role unless absolutely necessary.
-
-If you need an "architect" → use "planner"
-If you need a "designer" → use "planner" or "writer"
-If you need an "engineer" → use "coder"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Your task:
-1. Understand what the user needs
-2. Decide which agent roles are required - BE MINIMAL for simple queries
-3. Define the sequence WITH DEPENDENCIES for parallel execution
-4. Use researcher role ONLY if current/web information is needed
-5. CRITICAL: Match agent count to complexity
-   - Very simple factual questions: 1 agent ONLY
-   - Simple questions: 1-2 agents
-   - Questions needing analysis: 2-3 agents  
-   - Multi-part tasks: 4-6 agents
-   - Complex projects: 6-10 agents
-   - Massive undertakings: 10+ agents or use delegation
-
-IMPORTANT: For simple questions that can be answered directly, use ONLY 1 agent!
-
-⚠️ GUARDRAILS - PREVENT EXCESSIVE COMPLEXITY:
-- Current depth: {depth}/{max_depth}
-- If depth > 2: Use FEWER agents (max 4-5) and avoid delegation
-- If depth = 0: Can use more agents and delegation for complex tasks
-- NEVER create more than 10 agents in a single plan
-- Each agent with can_delegate=True can create sub-agents (increases depth)
-- Delegation is for VERY complex tasks that need sub-workflows
-
-PARALLELIZATION:
-- Specify "depends_on" field with list of agent indices that must complete first
-- Agents with empty "depends_on": [] run immediately in parallel
-- Agents with "depends_on": [0, 2] wait for agents 0 and 2 to complete
-- MAXIMIZE PARALLELISM: Run independent tasks (e.g., multiple researchers) simultaneously
-
-⚠️ CRITICAL: LOGICAL DATA FLOW RULES! ⚠️
-
-1. PARALLEL EXECUTION:
-   - If tasks are independent, they should have "depends_on": []
-   - Example: Researching different topics CAN run in parallel
-   - Example: Multiple analyzers examining different aspects CAN run in parallel
-   - ONLY create dependencies when output from one agent is REQUIRED as input to another
-
-2. SYNTHESIZER/WRITER MUST BE LAST:
-   - Synthesizers and final writers MUST depend on ALL content-producing agents
-   - A synthesizer CANNOT run in parallel with researchers/analyzers it needs to synthesize!
-   - Synthesizer dependencies example: "depends_on": [0, 1, 2, 3, 4]
-   - The synthesizer should typically be the LAST agent (highest index)
-
-3. CRITIC COMES BEFORE SYNTHESIZER:
-   - If you include a critic, it should review content BEFORE final synthesis
-   - Critics depend on content producers, synthesizers depend on critics
-
-4. AVOID UNNECESSARY SEQUENTIAL CHAINS:
-   - A chain like 0→1→2→3→4→5→6→7 is WRONG if tasks are independent!
-   - Use parallel execution whenever tasks don't need each other's output
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CRITICAL: OUTPUT FORMAT - READ THIS CAREFULLY!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-⚠️ YOU MUST OUTPUT **ONLY** VALID JSON - NOTHING ELSE! ⚠️
-
-DO NOT write:
-- "Here's the plan" or any introductory text
-- "Let me create a plan" or thinking statements  
-- Explanations before the JSON
-- Explanations after the JSON
-- Markdown code blocks like ```json
-- Any text that is not JSON
-
-Your ENTIRE response must be ONLY the JSON object.
-The FIRST character must be {{ and the LAST character must be }}
-
-Required JSON format:
+JSON format:
 {{{{
-  "description": "brief plan description",
+  "description": "brief plan",
   "agents": [
-    {{{{
-      "role": "ROLE_NAME",
-      "task": "specific task",
-      "depends_on": []  ← CRITICAL: Use [] ONLY if agent runs FIRST (no data needed from others)
-                        ← Use [0] if agent needs output from agent 0
-                        ← Use [0, 1, 2] if agent needs outputs from agents 0, 1, AND 2
-    }}}}
+    {{"role": "ROLE_NAME", "task": "specific task", "depends_on": []}}
   ]
 }}}}
 
-⚠️ CRITICAL EXAMPLES OF depends_on:
-- "depends_on": [] → Agent runs IMMEDIATELY (first layer, no waiting)
-- "depends_on": [0] → Agent WAITS for agent 0 to finish
-- "depends_on": [0, 1] → Agent WAITS for BOTH agents 0 and 1 to finish
-- "depends_on": [0, 1, 2, 3] → Agent WAITS for agents 0, 1, 2, and 3 to finish
-
-Rules:
-- ⚠️ ONLY use roles from the list above - NO made-up roles!
-- BE EFFICIENT with agent count - use minimum needed
-- ⚠️ CRITICAL: Each agent must have a UNIQUE, NON-OVERLAPPING task
-- ⚠️ NEVER create multiple agents doing the same or similar work
-- Avoid duplicating roles unless tasks are TRULY DIFFERENT (e.g., researching "Python" vs "Rust" is OK, but NOT "Python web" and "Python frameworks")
-- For simple factual questions, use JUST 1 agent
-- Break complex tasks into specialized steps (each step = 1 agent)
-- Use 1-2 agents for simple queries, 3-4 for moderate, 5-6 MAX for complex
-- ONLY use 7+ agents if absolutely necessary for genuinely complex multi-domain tasks
-- For very complex tasks, prefer using coordinator/planner for delegation instead of many agents
-- Last agent should usually be "synthesizer" only if combining 3+ outputs
-- Each agent gets ONE specific focused task that doesn't overlap with others
-- Only use "researcher" if web search is truly needed
-- ⚠️ Quality over quantity: 3 focused agents > 6 redundant agents
-
-PARALLELIZATION RULES:
-- Use "depends_on": [] ONLY for truly independent tasks (e.g., researching different topics)
-- Use "depends_on": [X] when task needs output from agent X
-- Sequential dependencies create a chain: A → B → C → D (each depends on previous)
-- Parallel tasks have NO data dependencies between them
-- Example parallel: Research Python + Research Rust (independent)
-- Example sequential: Research → Analyze → Plan → Write (each needs previous output)
-
-⚠️ REMEMBER: Output ONLY JSON, nothing else!
+Dependencies:
+- "depends_on": [] → runs immediately
+- "depends_on": [0] → waits for agent 0
+- "depends_on": [0, 1] → waits for agents 0 and 1
 
 Examples:
+"Explain X" → {{"description": "Explanation", "agents": [{{"role": "analyzer", "task": "Explain X clearly", "depends_on": []}}]}}
 
-Simple (1-2 agents):
-"Explain machine learning" → {{"description": "Direct explanation", "agents": [{{"role": "analyzer", "task": "Explain machine learning", "depends_on": []}}]}}
-
-Moderate with PARALLELISM (2-4 agents):
-"Plan a 3-day trip to Paris" → {{"description": "Travel planning", "agents": [
-  {{"role": "researcher", "task": "Research Paris attractions, hotels, and logistics", "depends_on": []}},
-  {{"role": "planner", "task": "Create detailed 3-day itinerary with schedule", "depends_on": [0]}},
-  {{"role": "writer", "task": "Format complete travel guide with tips", "depends_on": [1]}}
+"Compare X vs Y" → {{"description": "Comparison", "agents": [
+  {{"role": "researcher", "task": "Research X", "depends_on": []}},
+  {{"role": "researcher", "task": "Research Y", "depends_on": []}},
+  {{"role": "synthesizer", "task": "Compare X and Y based on research", "depends_on": [0, 1]}}
 ]}}
 
-GOOD PARALLELISM - Truly Different Topics (3-5 agents):
-"Compare Python vs Rust for web development" → {{"description": "Programming comparison", "agents": [
-  {{"role": "researcher", "task": "Research Python web frameworks and ecosystem", "depends_on": []}},
-  {{"role": "researcher", "task": "Research Rust web frameworks and ecosystem", "depends_on": []}},
-  {{"role": "analyzer", "task": "Compare performance, ecosystem, and developer experience", "depends_on": [0, 1]}},
-  {{"role": "synthesizer", "task": "Compile comprehensive comparison with recommendations", "depends_on": [2]}}
-]}}
-NOTE: Layer 0: [0,1] researchers in PARALLEL → Layer 1: [2] analyzer → Layer 2: [3] synthesizer
-
-Complex with MAXIMUM PARALLELISM (5-6 agents MAX):
-"Create a business plan with market research and financial projections" → {{"description": "Business planning", "agents": [
-  {{"role": "researcher", "task": "Complete market research: competitors, trends, customers", "depends_on": []}},
-  {{"role": "analyzer", "task": "Analyze market opportunities, threats, and strategy", "depends_on": [0]}},
-  {{"role": "analyzer", "task": "Create financial projections and budget analysis", "depends_on": [0]}},
-  {{"role": "planner", "task": "Design business strategy and execution roadmap", "depends_on": [1, 2]}},
-  {{"role": "writer", "task": "Write complete business plan document", "depends_on": [3]}},
-  {{"role": "critic", "task": "Review plan and refine with improvements", "depends_on": [4]}}
-]}}
-NOTE: 1 researcher → 2 parallel analyzers → 1 planner → 1 writer → 1 critic (6 agents total)
-
-⚠️ AVOID THIS - TOO MANY REDUNDANT AGENTS:
-BAD: "Research AI" with 5 different researchers all searching similar topics
-BAD: Multiple analyzers doing overlapping analysis
-BAD: Using synthesizer when you only have 1-2 outputs
-GOOD: Each agent has distinct, unique purpose with no overlap
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-NOW OUTPUT YOUR PLAN AS JSON ONLY - START WITH {{ AND END WITH }}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+Output ONLY JSON - no explanations, no markdown blocks."""
 
         # Build human message with conversation context if available
         human_content = query
@@ -342,10 +176,22 @@ NOW OUTPUT YOUR PLAN AS JSON ONLY - START WITH {{ AND END WITH }}
             "tags": ["coordinator", "planning", "meta_agent"]
         }  # type: ignore
         
-        # Get the plan
+        # Get the plan - use appropriate method based on LLM type
         content = ""
         try:
-            response = self.llm.invoke(messages, config=config)
+            # For OpenAI, we can use structured output mode
+            llm_class_name = self.llm.__class__.__name__
+            if "OpenAI" in llm_class_name:
+                # OpenAI supports response_format for JSON
+                response = self.llm.invoke(
+                    messages, 
+                    config=config,
+                    response_format={"type": "json_object"}  # type: ignore
+                )
+            else:
+                # For Ollama and Claude, use regular invoke
+                response = self.llm.invoke(messages, config=config)
+            
             content = str(response.content) if response.content else ""
             
             # Log raw response for debugging
@@ -410,14 +256,11 @@ NOW OUTPUT YOUR PLAN AS JSON ONLY - START WITH {{ AND END WITH }}
             
             # GUARDRAIL: Limit number of agents based on complexity
             agent_count = len(plan_data.get("agents", []))
-            max_agents = 10 if depth == 0 else 5  # Fewer agents for deeper levels
+            max_agents = 12  # Soft limit, trust the model but prevent runaway
             
             if agent_count > max_agents:
-                logger.warning(f"⚠️ Plan has {agent_count} agents, limiting to {max_agents}")
+                logger.warning(f"⚠️ Plan has {agent_count} agents, limiting to {max_agents} for safety")
                 plan_data["agents"] = plan_data["agents"][:max_agents]
-            elif agent_count > 6:
-                logger.warning(f"⚠️ Plan has {agent_count} agents - this may be excessive")
-                logger.warning(f"   Consider consolidating similar agents or using fewer, more focused agents")
             
             # Create execution plan with delegation info AND VALIDATION
             agents = []
@@ -576,29 +419,21 @@ NOW OUTPUT YOUR PLAN AS JSON ONLY - START WITH {{ AND END WITH }}
                     logger.warning(f"⚠️ Synthesizer at position {i} has no dependencies")
                     return False
         
-        # Check 2: Detect redundant agents (same role with similar tasks)
-        seen_tasks = {}
+        # Check 2: Detect potential redundancy (warning only, don't block)
+        seen_roles = {}
         for i, agent in enumerate(agents):
             role = agent.get('role', '')
-            task = agent.get('task', '').lower()
-            task_key = f"{role}:{task[:50]}"  # First 50 chars
-            
-            # Check for very similar tasks in same role
-            for existing_key in seen_tasks:
-                if existing_key.startswith(f"{role}:"):
-                    existing_task = existing_key.split(":", 1)[1]
-                    # Simple similarity check (shared words)
-                    task_words = set(task.split())
-                    existing_words = set(existing_task.split())
-                    overlap = len(task_words & existing_words) / max(len(task_words), len(existing_words))
-                    if overlap > 0.6:  # 60% word overlap = likely redundant
-                        logger.warning(f"⚠️ Agent {i} ({role}) seems redundant with agent {seen_tasks[existing_key]}")
-                        logger.warning(f"   Task 1: {existing_task[:80]}")
-                        logger.warning(f"   Task 2: {task[:80]}")
-            
-            seen_tasks[task_key] = i
+            if role in seen_roles:
+                seen_roles[role].append(i)
+            else:
+                seen_roles[role] = [i]
         
-        # Check 3: No circular dependencies (basic check)
+        # Warn about multiple agents with same role
+        for role, indices in seen_roles.items():
+            if len(indices) > 2 and role != 'researcher':  # Multiple researchers can be valid
+                logger.info(f"ℹ️  Multiple {role} agents: {indices} - ensure tasks are distinct")
+        
+        # Check 3: Basic dependency validation
         for i, agent in enumerate(agents):
             depends_on = agent.get('depends_on', [])
             # Convert to list if single value
@@ -614,11 +449,11 @@ NOW OUTPUT YOUR PLAN AS JSON ONLY - START WITH {{ AND END WITH }}
                     continue
                     
                 if dep_int == i:
-                    logger.warning(f"⚠️ Agent {i} depends on itself")
+                    logger.warning(f"⚠️ Agent {i} depends on itself - fixing")
                     return False
                 # Check for forward dependencies
                 if dep_int >= i:
-                    logger.warning(f"⚠️ Agent {i} depends on future agent {dep_int}")
+                    logger.warning(f"⚠️ Agent {i} depends on future agent {dep_int} - fixing")
                     return False
         
         return True

@@ -60,9 +60,9 @@ class RoleLibrary:
             ),
             "coder": AgentRole(
                 name="coder",
-                description="Writes and explains code, solves programming problems",
-                capabilities=["coding", "debugging", "technical_explanation"],
-                system_prompt="You are a coding specialist. Write clean, well-documented code and explain technical concepts clearly.",
+                description="Writes code and solves programming problems (ONLY for coding tasks)",
+                capabilities=["coding", "debugging", "code_review"],
+                system_prompt="You are a coding specialist. Write clean, well-documented code and solve programming problems.",
                 needs_tools=False
             ),
             "critic": AgentRole(
