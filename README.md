@@ -1,9 +1,11 @@
 # Magentic
 
-[![CI](https://github.com/amirsdream/magentic/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/magentic/actions/workflows/ci.yml)
+[![CI](https://github.com/amirsdream/magentic/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/amirsdream/magentic/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agent%20Orchestration-orange.svg)](https://github.com/langchain-ai/langgraph)
+[![React](https://img.shields.io/badge/React-18-61DAFB.svg?logo=react)](https://reactjs.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)](https://www.docker.com/)
 
 **Magnetic Agent Networks** — Dynamic multi-agent AI system with parallel execution.
 
