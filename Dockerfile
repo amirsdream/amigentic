@@ -33,8 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash magentic
+# Create non-root user and set up directories
+RUN useradd --create-home --shell /bin/bash magentic && \
+    mkdir -p /app/data /app/rag_data && \
+    chown -R magentic:magentic /app
+
 USER magentic
 
 # Copy requirements and install
@@ -48,9 +51,6 @@ COPY --chown=magentic:magentic alembic.ini .
 
 # Copy frontend build
 COPY --from=frontend-builder --chown=magentic:magentic /app/frontend/dist ./frontend/dist
-
-# Create data directory
-RUN mkdir -p data rag_data
 
 # Expose ports
 EXPOSE 8000
