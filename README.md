@@ -9,6 +9,8 @@
 
 **Magnetic Agent Networks** — Dynamic multi-agent AI system with parallel execution.
 
+![MagenticUI Screenshot](assets/MagenticUI.png)
+
 ## Why Magentic?
 
 Traditional AI assistants use a single model for every task. Magentic takes a different approach: it acts as an **AI orchestrator** that understands your question, breaks it into components, and deploys the right combination of specialized agents to tackle each part. A research question might spawn a web researcher and an analyzer working in parallel; a coding task might use a planner, coder, and critic in sequence. This dynamic orchestration means you get expert-level responses without manually prompting different models—Magentic figures out the optimal strategy automatically and executes it efficiently using parallel processing.
