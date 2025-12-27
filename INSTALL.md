@@ -1,297 +1,129 @@
 # Installation Guide
 
-## 🚀 Automated Setup (Recommended)
+> **Recommended:** Use `./magentic.sh setup` for automated installation. This guide is for manual setup.
 
-**The easiest way to get started:**
+## Prerequisites
 
-```bash
-./magentic.sh setup
-```
-
-The setup script will guide you through:
-1. ✅ Creating a Python virtual environment
-2. ✅ Installing all dependencies
-3. ✅ Choosing your LLM provider (Ollama/OpenAI/Claude)
-4. ✅ Configuring your `.env` file
-5. ✅ Installing and pulling AI models (if using Ollama)
-6. ✅ Creating necessary directories
-7. ✅ Validating the installation
-
-After setup completes:
-```bash
-./magentic.sh start        # Start all services
-# or
-./magentic.sh cli          # Interactive CLI mode
-```
-
----
+- **Python 3.10+**
+- **Node.js 18+** (for frontend)
+- **Docker** (optional, for MCP services)
 
 ## Manual Installation
 
-If you prefer manual installation or need to customize the setup:
+### 1. Clone and Setup Environment
 
-### Quick Start
-
-#### Minimal Installation (Core Only)
 ```bash
-pip install langchain langchain-core langchain-community python-dotenv
-```
+git clone <your-repo-url>
+cd test_langchain
 
-#### Full Installation (All Features)
-```bash
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Install frontend
+cd frontend && npm install && cd ..
 ```
 
-## Provider-Specific Installation
+### 2. Configure Environment
 
-### 1. Using Ollama (Local, Free)
 ```bash
-# Core
-pip install langchain langchain-core langchain-ollama python-dotenv
-
-# For RAG
-pip install qdrant-client langchain-qdrant
-
-# For tools
-pip install duckduckgo-search
-
-# For multi-agent
-pip install langgraph langgraph-checkpoint
-
-# For UI
-pip install gradio fastapi uvicorn
+cp .env.example .env
 ```
 
-**Additional Setup:**
-- Install Ollama: https://ollama.ai
-- Pull models: `ollama pull llama3.1` and `ollama pull nomic-embed-text`
+Edit `.env` with your LLM provider:
 
-### 2. Using OpenAI
 ```bash
-# Core
-pip install langchain langchain-core langchain-openai tiktoken python-dotenv
+# Ollama (free, local)
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.2:1b
 
-# For RAG
-pip install qdrant-client langchain-qdrant
+# OpenAI
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 
-# For tools
-pip install duckduckgo-search
-
-# For multi-agent
-pip install langgraph langgraph-checkpoint
-
-# For UI
-pip install gradio fastapi uvicorn
+# Claude
+LLM_PROVIDER=claude
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Additional Setup:**
-- Set API key: `export OPENAI_API_KEY=sk-...`
+### 3. Initialize Database
 
-### 3. Using Claude (Anthropic)
 ```bash
-# Core
-pip install langchain langchain-core langchain-anthropic python-dotenv
-
-# For RAG with Voyage AI (Anthropic recommended)
-# Note: Voyage AI has version conflicts - install separately:
-pip install langchain-voyageai
-# This will downgrade langchain-core to 0.3.x for compatibility
-
-# Or use Ollama for local embeddings (no version conflicts, no API cost)
-pip install langchain-ollama
-
-# Vector store
-pip install qdrant-client langchain-qdrant
-
-# For tools
-pip install duckduckgo-search
-
-# For multi-agent
-pip install langgraph langgraph-checkpoint
-
-# For UI
-pip install gradio fastapi uvicorn
+alembic upgrade head
+# Optional: Create demo user (demo/demo123)
+python init_db.py --demo
 ```
 
-**Additional Setup:**
-- Set Anthropic API key: `export ANTHROPIC_API_KEY=sk-ant-...`
-- **For Voyage AI**: `export VOYAGE_API_KEY=voy-...` (get from voyageai.com)
-  - **Warning**: Installing langchain-voyageai will downgrade langchain-core to 0.3.x
-- **Recommended**: Use Ollama for free local embeddings (no version conflicts)
+### 4. Start Services
 
-## Optional Components
-
-### Vector Stores
+**Terminal 1 (Backend):**
 ```bash
-# Qdrant (recommended)
-pip install qdrant-client langchain-qdrant
-
-# ChromaDB (alternative)
-pip install chromadb langchain-chroma
+source .venv/bin/activate
+python -m src.run_api
 ```
 
-### Embeddings
+**Terminal 2 (Frontend):**
 ```bash
-# Voyage AI (best for Claude - WARNING: has version conflicts)
-# Installing this will downgrade langchain-core to 0.3.x
-pip install langchain-voyageai
-
-# OpenAI embeddings (already installed with langchain-openai)
-
-# Ollama embeddings (already installed with langchain-ollama)
-# Recommended: Use Ollama for Claude to avoid version conflicts
+cd frontend && npm run dev
 ```
 
-### Observability
+Open http://localhost:3000
+
+## LLM Provider Setup
+
+### Ollama (Recommended for local)
+
 ```bash
-pip install arize-phoenix openinference-instrumentation-langchain
-pip install opentelemetry-api opentelemetry-sdk
-pip install opentelemetry-exporter-otlp opentelemetry-exporter-otlp-proto-http
+# Install Ollama: https://ollama.com
+ollama pull llama3.2:1b
+ollama pull nomic-embed-text  # For RAG embeddings
 ```
 
-### Visualization
+### OpenAI
+
+Get API key from https://platform.openai.com
+
+### Claude
+
+Get API key from https://console.anthropic.com
+
+## Optional Features
+
+### RAG (Knowledge Base)
+
 ```bash
-pip install pyvis rich
+ENABLE_RAG=true
+RAG_VECTOR_STORE=qdrant
 ```
 
-### Database & Auth
+See [RAG & Tools Guide](docs/RAG_AND_TOOLS.md) for details.
+
+### MCP (Model Context Protocol)
+
+Requires Docker:
 ```bash
-pip install sqlalchemy alembic passlib bcrypt
+./magentic.sh mcp
 ```
 
-### Development Tools
-```bash
-pip install pytest pytest-cov black flake8 mypy
-```
-
-## Installation by Feature
-
-### Feature: Basic Chat
-```bash
-pip install langchain langchain-core python-dotenv
-# + your LLM provider (langchain-ollama/openai/anthropic)
-```
-
-### Feature: RAG (Document Retrieval)
-```bash
-# Vector store
-pip install qdrant-client langchain-qdrant
-
-# Embeddings (choose one)
-pip install langchain-voyageai  # For Claude (recommended)
-# OR use langchain-openai for OpenAI embeddings
-# OR use langchain-ollama for local embeddings
-```
-
-### Feature: Multi-Agent System
-```bash
-pip install langgraph langgraph-checkpoint langsmith
-```
-
-### Feature: Web Search
-```bash
-pip install duckduckgo-search
-```
-
-### Feature: Web UI
-```bash
-pip install gradio
-```
-
-### Feature: REST API
-```bash
-pip install fastapi uvicorn websockets httpx
-```
-
-## Verification
-
-Check your installation:
-```bash
-# Verify core packages
-python -c "import langchain; print(f'LangChain: {langchain.__version__}')"
-
-# Verify LLM provider (example for Ollama)
-python -c "from langchain_ollama import ChatOllama; print('Ollama: OK')"
-
-# Verify RAG components
-python -c "from qdrant_client import QdrantClient; print('Qdrant: OK')"
-
-# Verify multi-agent
-python -c "import langgraph; print('LangGraph: OK')"
-
-# Verify UI
-python -c "import gradio; print(f'Gradio: {gradio.__version__}')"
-```
+See [RAG & Tools Guide](docs/RAG_AND_TOOLS.md) for MCP setup.
 
 ## Troubleshooting
 
-### ImportError: No module named 'langchain_text_splitters'
+**Port already in use:**
 ```bash
-pip install langchain-text-splitters
+./magentic.sh stop
+# or manually: lsof -i :8000 | kill
 ```
 
-### ImportError: No module named 'dotenv'
+**Database issues:**
 ```bash
-pip install python-dotenv
+./magentic.sh db-reset
 ```
 
-### ModuleNotFoundError for specific provider
+**Missing dependencies:**
 ```bash
-# For Ollama
-pip install langchain-ollama
-
-# For OpenAI
-pip install langchain-openai
-
-# For Claude
-pip install langchain-anthropic
-
-# For Voyage AI
-pip install langchain-voyageai
+pip install -r requirements.txt
 ```
-
-## Recommended Setup
-
-### For Development (Local, Free)
-```bash
-# Install Ollama first: https://ollama.ai
-ollama pull llama3.1
-ollama pull nomic-embed-text
-
-# Then install Python packages
-pip install langchain langchain-core langchain-ollama \
-    qdrant-client langchain-qdrant \
-    duckduckgo-search \
-    langgraph langgraph-checkpoint \
-    gradio fastapi uvicorn \
-    python-dotenv rich
-```
-
-### For Production (Cloud, API-based)
-```bash
-
-# Install packages (use Ollama for embeddings to avoid conflicts)
-pip install langchain langchain-core langchain-anthropic langchain-ollama \
-    qdrant-client langchain-qdrant \
-    duckduckgo-search \
-    langgraph langgraph-checkpoint \
-    gradio fastapi uvicorn \
-    python-dotenv rich \
-    arize-phoenix openinference-instrumentation-langchain
-
-# Optional: Install Voyage AI (will downgrade langchain-core to 0.3.x)
-# export VOYAGE_API_KEY=voy-...
-# pip install langchain-voyageai
-    python-dotenv rich \
-    arize-phoenix openinference-instrumentation-langchain
-```
-
-## Minimal vs Full Install Size
-
-- **Minimal** (core only): ~200MB
-- **With Ollama support**: ~300MB
-- **With OpenAI support**: ~250MB
-- **With Claude + Voyage AI**: ~280MB
-- **Full installation**: ~500MB
-
-Note: torch/sentence-transformers NOT required (we use API-based or Ollama embeddings)
