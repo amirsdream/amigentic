@@ -28,6 +28,9 @@ from .tools import ToolManager
 # Services
 from .services import MCPClient, RAGService
 
+# Pricing
+from .pricing import calculate_cost, get_model_pricing, get_pricing_table_summary
+
 # UI
 from .ui import ExecutionVisualizer
 
@@ -55,6 +58,10 @@ __all__ = [
     # Services
     "MCPClient",
     "RAGService",
+    # Pricing
+    "calculate_cost",
+    "get_model_pricing",
+    "get_pricing_table_summary",
     # UI
     "ExecutionVisualizer",
 ]

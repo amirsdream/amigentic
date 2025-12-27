@@ -6,12 +6,14 @@ Provides SQLite database query and management capabilities
 import os
 import logging
 import re
+import time
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 import aiosqlite  # type: ignore[import-untyped]
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,6 +28,36 @@ ALLOWED_WRITE_OPS = os.getenv("ALLOW_WRITE_OPS", "true").lower() == "true"
 # Ensure DB directory exists
 DB_DIR.mkdir(parents=True, exist_ok=True)
 
+# ============================================
+# Prometheus Metrics
+# ============================================
+DB_REQUESTS = Counter(
+    'db_requests_total', 
+    'Total database requests',
+    ['database', 'operation', 'status']
+)
+DB_QUERY_DURATION = Histogram(
+    'db_query_duration_seconds',
+    'Database query duration',
+    ['database', 'operation'],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+)
+DB_ROWS_RETURNED = Histogram(
+    'db_rows_returned',
+    'Rows returned per query',
+    ['database'],
+    buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000]
+)
+DB_SIZE_BYTES = Gauge(
+    'db_size_bytes',
+    'Database size in bytes',
+    ['database']
+)
+DB_ACTIVE_CONNECTIONS = Gauge(
+    'db_active_connections',
+    'Active database connections',
+    ['database']
+)
 
 # ============================================
 # Models
@@ -79,11 +111,11 @@ async def execute_query(db_path: Path, sql: str, params: Optional[List[Any]] = N
         
         async with db.execute(sql, params or []) as cursor:
             if sql.strip().upper().startswith('SELECT') or sql.strip().upper().startswith('PRAGMA'):
-                rows = await cursor.fetchmany(max_results or MAX_RESULTS)
+                rows = list(await cursor.fetchmany(max_results or MAX_RESULTS))
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 return {
                     "columns": columns,
-                    "rows": [dict(row) for row in rows],
+                    "rows": [dict(zip(columns, row)) for row in rows],
                     "row_count": len(rows)
                 }
             else:
@@ -102,12 +134,26 @@ async def execute_query(db_path: Path, sql: str, params: Optional[List[Any]] = N
 async def health_check():
     """Health check endpoint."""
     databases = list(DB_DIR.glob("*.db"))
+    
+    # Update database size metrics
+    for db_path in databases:
+        DB_SIZE_BYTES.labels(database=db_path.stem).set(db_path.stat().st_size)
+    
     return {
         "status": "healthy",
         "db_dir": str(DB_DIR),
         "databases": [db.stem for db in databases],
         "write_ops_enabled": ALLOWED_WRITE_OPS
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
 
 
 @app.get("/tools")
@@ -197,29 +243,43 @@ async def list_databases():
 @app.post("/tools/query")
 async def query(request: QueryRequest):
     """Execute read-only SQL query."""
+    start_time = time.perf_counter()
     try:
         db_path = get_db_path(request.database)
         
         if not db_path.exists():
+            DB_REQUESTS.labels(database=request.database, operation='query', status='not_found').inc()
             raise HTTPException(status_code=404, detail=f"Database '{request.database}' not found")
         
         if not is_read_only(request.sql):
+            DB_REQUESTS.labels(database=request.database, operation='query', status='invalid').inc()
             raise HTTPException(
                 status_code=400, 
                 detail="Only SELECT and PRAGMA queries allowed. Use /tools/execute for write operations."
             )
         
-        result = await execute_query(
-            db_path, 
-            request.sql, 
-            request.params,
-            request.max_results
-        )
+        DB_ACTIVE_CONNECTIONS.labels(database=request.database).inc()
+        try:
+            result = await execute_query(
+                db_path, 
+                request.sql, 
+                request.params,
+                request.max_results
+            )
+        finally:
+            DB_ACTIVE_CONNECTIONS.labels(database=request.database).dec()
         
-        logger.info(f"✓ Query on {request.database}: {len(result.get('rows', []))} rows")
+        # Record metrics
+        row_count = len(result.get('rows', []))
+        DB_REQUESTS.labels(database=request.database, operation='query', status='success').inc()
+        DB_QUERY_DURATION.labels(database=request.database, operation='query').observe(time.perf_counter() - start_time)
+        DB_ROWS_RETURNED.labels(database=request.database).observe(row_count)
+        
+        logger.info(f"✓ Query on {request.database}: {row_count} rows")
         return result
         
     except ValueError as e:
+        DB_REQUESTS.labels(database=request.database, operation='query', status='error').inc()
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Query error: {e}")

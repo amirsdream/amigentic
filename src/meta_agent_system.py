@@ -34,10 +34,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Track current agent for token tracking
-_current_agent_id: Optional[str] = None
-_current_agent_role: Optional[str] = None
-
 
 class MetaAgentSystem:
     """Dynamic meta-agent system."""
@@ -133,35 +129,18 @@ class MetaAgentSystem:
 
         Args:
             response: LLM response object
-            agent_id: Agent identifier (optional)
-            role: Agent role name (optional)
+            agent_id: Agent identifier
+            role: Agent role name
         """
-        global _current_agent_id, _current_agent_role
         tracker = get_tracker()
 
-        # Use passed params or fall back to module-level tracking
-        aid = agent_id or _current_agent_id
-        r = role or _current_agent_role
-
-        if aid and r:
-            tracker.add_agent_usage(aid, r, response)
-            logger.debug(f"Tracked tokens for {aid} ({r})")
+        if agent_id and role:
+            tracker.add_agent_usage(agent_id, role, response)
+            logger.debug(f"Tracked tokens for {agent_id} ({role})")
         else:
             # Track as general usage if no agent context
             usage = tracker.extract_usage_from_response(response)
             logger.debug(f"Tracked general tokens: {usage.to_dict()}")
-
-    def _set_current_agent(self, agent_id: str, role: str) -> None:
-        """Set current agent for token tracking."""
-        global _current_agent_id, _current_agent_role
-        _current_agent_id = agent_id
-        _current_agent_role = role
-
-    def _clear_current_agent(self) -> None:
-        """Clear current agent tracking."""
-        global _current_agent_id, _current_agent_role
-        _current_agent_id = None
-        _current_agent_role = None
 
     def process_query(
         self, query: str, depth: int = 0, max_depth: int | None = None
@@ -392,17 +371,11 @@ class MetaAgentSystem:
             logger.error(f"❌ {error_msg}")
             return f"[ERROR: {error_msg}]"
 
-        # Set current agent for token tracking
+        # Execute agent with agent_id for token tracking
         agent_id = f"{role_name}_{agent_index}"
-        self._set_current_agent(agent_id, role_name)
-
-        # Execute agent
         result = self._execute_agent(
-            role, task, query, previous_outputs, [], depth=depth, max_depth=max_depth
+            role, task, query, previous_outputs, [], depth=depth, max_depth=max_depth, agent_id=agent_id
         )
-
-        # Clear agent tracking
-        self._clear_current_agent()
 
         # Extract content from dict result
         output = result.get("content", str(result)) if isinstance(result, dict) else str(result)
@@ -585,18 +558,12 @@ class MetaAgentSystem:
         depends_on = agent_spec.get("depends_on", [])
         previous_outputs = [completed_outputs[i] for i in depends_on if i in completed_outputs]
 
-        # Set current agent for token tracking
-        agent_id = f"{role_name}_{agent_index}"
-        self._set_current_agent(agent_id, role_name)
-
         # Execute in thread pool to avoid blocking (LLM calls are blocking)
+        agent_id = f"{role_name}_{agent_index}"
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, self._execute_agent, role, task, query, previous_outputs, [], depth, max_depth
+            None, self._execute_agent, role, task, query, previous_outputs, [], depth, max_depth, agent_id
         )
-
-        # Clear agent tracking
-        self._clear_current_agent()
 
         # Extract content from dict result
         output = result.get("content", str(result)) if isinstance(result, dict) else str(result)
@@ -709,10 +676,7 @@ class MetaAgentSystem:
         # Ensure conversation_history is a list (not None) for thread pool
         conv_hist = conversation_history if conversation_history is not None else []
 
-        # Set current agent for token tracking
-        self._set_current_agent(agent_id, role)
-
-        # Execute in thread pool
+        # Execute in thread pool - pass agent_id for token tracking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
@@ -724,10 +688,8 @@ class MetaAgentSystem:
             conv_hist,
             0,
             3,
+            agent_id,  # Pass agent_id for token tracking
         )
-
-        # Clear agent tracking
-        self._clear_current_agent()
 
         logger.info(f"✅ {agent_id} ({role}) completed")
         return result
@@ -741,6 +703,7 @@ class MetaAgentSystem:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         depth: int = 0,
         max_depth: int = 3,
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Execute a single agent.
 
@@ -751,6 +714,7 @@ class MetaAgentSystem:
             previous_outputs: Outputs from previous agents.
             depth: Current execution depth.
             max_depth: Maximum execution depth for this query.
+            agent_id: Agent identifier for token tracking.
 
         Returns:
             Dict with 'content' (agent's text output) and 'tool_calls' (list of tools used).
@@ -854,7 +818,7 @@ IMPORTANT: If completing directly, keep your response under {self.config.ui_disp
                 logger.error(f"⚠️ {role.name} needs tools but no tools are available!")
                 logger.warning(f"Falling back to LLM without tools")
                 response = self.llm.invoke([system_msg, task_msg], config=config)
-                self._track_tokens(response)
+                self._track_tokens(response, agent_id, role.name)
                 return {"content": str(response.content), "tool_calls": []}
 
             # Special handling for researcher role - more reliable than tool calling
@@ -873,7 +837,7 @@ IMPORTANT: Keep search queries short and focused."""
                 )
 
                 search_response = self.llm.invoke([search_prompt, task_msg], config=config)
-                self._track_tokens(search_response)
+                self._track_tokens(search_response, agent_id, role.name)
                 search_queries = str(search_response.content).strip().split("\n")
                 search_queries = [q.strip() for q in search_queries if q.strip()][
                     :3
@@ -896,7 +860,7 @@ IMPORTANT: Keep search queries short and focused."""
                     )
                     logger.warning(f"   └─ Falling back to LLM without search")
                     response = self.llm.invoke([system_msg, task_msg], config=config)
-                    self._track_tokens(response)
+                    self._track_tokens(response, agent_id, role.name)
                     return {"content": str(response.content), "tool_calls": []}
 
                 for query in search_queries:
@@ -950,7 +914,7 @@ IMPORTANT: Keep search queries short and focused."""
                         ],
                         config=config,
                     )
-                    self._track_tokens(final_response)
+                    self._track_tokens(final_response, agent_id, role.name)
 
                     # Debug: check response structure
                     logger.info(f"🔍 Response type: {type(final_response)}")
@@ -968,7 +932,7 @@ IMPORTANT: Keep search queries short and focused."""
                         # Fallback: try without the search context
                         logger.warning(f"⚠️ Retrying without search context...")
                         fallback = self.llm.invoke([system_msg, task_msg], config=config)
-                        self._track_tokens(fallback)
+                        self._track_tokens(fallback, agent_id, role.name)
                         result_content = str(fallback.content)
                         logger.info(f"✅ Fallback response: {len(result_content)} chars")
 
@@ -983,7 +947,7 @@ IMPORTANT: Keep search queries short and focused."""
                 else:
                     logger.warning(f"⚠️ No search results obtained, providing answer without search")
                     response = self.llm.invoke([system_msg, task_msg], config=config)
-                    self._track_tokens(response)
+                    self._track_tokens(response, agent_id, role.name)
                     result_content = str(response.content)
                     logger.info(
                         f"✅ {role.name} generated fallback response: {len(result_content)} chars"
@@ -995,6 +959,7 @@ IMPORTANT: Keep search queries short and focused."""
             logger.info(f"🔧 {role.name} has access to web search")
 
             response = llm_with_tools.invoke([system_msg, task_msg], config=config)
+            self._track_tokens(response, agent_id, role.name)
 
             # Check for tool calls
             if hasattr(response, "tool_calls") and response.tool_calls:
@@ -1085,7 +1050,7 @@ IMPORTANT: Keep search queries short and focused."""
                         ],
                         config=final_config,
                     )
-                    self._track_tokens(final_response)
+                    self._track_tokens(final_response, agent_id, role.name)
                     return {
                         "content": str(final_response.content),
                         "tool_calls": recorded_tool_calls,
@@ -1094,7 +1059,7 @@ IMPORTANT: Keep search queries short and focused."""
             return {"content": str(response.content), "tool_calls": []}
         else:
             response = self.llm.invoke([system_msg, task_msg], config=config)
-            self._track_tokens(response)
+            self._track_tokens(response, agent_id, role.name)
             response_content = str(response.content)
 
             # Check if delegation was requested (and is allowed)
@@ -1166,7 +1131,7 @@ Combine these results to complete your original task."""
                             final_response = self.llm.invoke(
                                 [system_msg, synthesis_msg], config=config
                             )
-                            self._track_tokens(final_response)
+                            self._track_tokens(final_response, agent_id, role.name)
                             return {"content": str(final_response.content), "tool_calls": []}
                 except json.JSONDecodeError:
                     # Not JSON, return as-is

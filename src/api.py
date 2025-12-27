@@ -35,6 +35,19 @@ from .database import (
 )
 from .services.rag import RAGService
 from .services.mcp_client import MCPClient
+from .metrics import (
+    setup_metrics,
+    get_metrics_middleware,
+    add_metrics_endpoint,
+    record_websocket_connect,
+    record_websocket_disconnect,
+    record_websocket_message,
+    record_tokens,
+    record_cost,
+    record_error,
+    track_query,
+    PROMETHEUS_AVAILABLE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +68,26 @@ class LoginRequest(BaseModel):
 
 app = FastAPI(title="Magentic API", version="2.0.0")
 
+# Import and include auth router (using fastapi-users)
+from .auth.router import router as auth_router
+from .auth.users import create_db_and_tables
+app.include_router(auth_router)
+
 # CORS middleware for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev servers
+    allow_origins=["http://localhost:8081", "http://localhost:8080", "http://localhost:5173", "http://localhost:3000"],  # React dev servers
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+# Prometheus metrics middleware and endpoint (must be added before app starts)
+metrics_middleware = get_metrics_middleware()
+if metrics_middleware:
+    app.add_middleware(metrics_middleware)
+add_metrics_endpoint(app)
 
 # Global instances
 config: Config = None  # type: ignore
@@ -96,6 +121,18 @@ async def startup_event():
     global config, meta_system, executor
 
     logger.info("🚀 Starting Magentic API...")
+    
+    # Run database migrations first
+    from .database import run_migrations
+    run_migrations()
+    logger.info("✓ Database migrations complete")
+    
+    # Set Prometheus app info (middleware/endpoint already registered at module load)
+    setup_metrics(app, version="2.0.0")
+    
+    # Create fastapi-users database tables
+    await create_db_and_tables()
+    logger.info("✓ Auth database tables ready")
 
     # Load configuration
     config = Config()
@@ -181,6 +218,28 @@ async def health_check():
     }
 
 
+@app.get("/pricing")
+async def get_pricing():
+    """Get LLM pricing information."""
+    from .pricing import get_pricing_table_summary, get_model_pricing
+    
+    current_model_pricing = None
+    if config:
+        pricing = get_model_pricing(config.llm_provider, config.get_model_name())
+        if pricing:
+            current_model_pricing = {
+                "provider": config.llm_provider,
+                "model": config.get_model_name(),
+                "input_cost_per_1m": pricing.input_cost,
+                "output_cost_per_1m": pricing.output_cost,
+            }
+    
+    return {
+        "current_model": current_model_pricing,
+        "pricing_table": get_pricing_table_summary(),
+    }
+
+
 @app.get("/profile/{username}")
 async def get_profile(username: str, db: Session = Depends(get_db)):
     """Get user profile."""
@@ -198,6 +257,8 @@ async def get_profile(username: str, db: Session = Depends(get_db)):
         "stats": {
             "total_queries": user.total_queries,
             "total_agents_executed": user.total_agents_executed,
+            "total_tokens_used": user.total_tokens_used or 0,
+            "total_cost": user.total_cost or 0.0,
         },
     }
 
@@ -455,6 +516,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time query processing."""
     await websocket.accept()
     active_connections.append(websocket)
+    record_websocket_connect()
 
     # Get username from query params or default to guest
     username = websocket.query_params.get("username", "guest")
@@ -570,6 +632,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in active_connections:
             active_connections.remove(websocket)
+        record_websocket_disconnect()
         # Cancel any running execution
         if cancel_event is not None:
             cancel_event.set()
@@ -580,8 +643,10 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
+        record_error(type(e).__name__, 'websocket')
         if websocket in active_connections:
             active_connections.remove(websocket)
+        record_websocket_disconnect()
         if websocket in cancellation_tokens:
             del cancellation_tokens[websocket]
 
@@ -598,8 +663,8 @@ async def process_query_with_updates(
         def is_cancelled():
             return cancel_event is not None and cancel_event.is_set()
         
-        # Reset token tracker for this execution
-        reset_tracker()
+        # Reset token tracker for this execution with LLM info
+        reset_tracker(provider=config.llm_provider, model=config.get_model_name())
 
         # Check cancellation before starting
         if is_cancelled():
@@ -681,6 +746,10 @@ async def process_query_with_updates(
         final_output = result.get("final_output", "")
         session_id = result.get("session_id", "")
 
+        # Get token usage summary BEFORE saving to include in DB
+        tracker = get_tracker()
+        token_summary = tracker.get_summary()
+
         # Save conversation to database (only for registered users, not guests)
         try:
             from .database import SessionLocal
@@ -691,7 +760,7 @@ async def process_query_with_updates(
 
                 # Only save conversations for registered users
                 if not user.is_guest:  # type: ignore
-                    save_conversation(db, user.id, query, final_output, plan_dict, session_id)  # type: ignore
+                    save_conversation(db, user.id, query, final_output, plan_dict, session_id, token_summary)  # type: ignore
                     logger.info(f"Saved conversation for user {username}")
                 else:
                     logger.info(f"Skipped saving conversation for guest user {username}")
@@ -699,10 +768,6 @@ async def process_query_with_updates(
                 db.close()
         except Exception as e:
             logger.error(f"Failed to save conversation: {e}")
-
-        # Send completion with token usage
-        tracker = get_tracker()
-        token_summary = tracker.get_summary()
 
         await websocket.send_json(
             {

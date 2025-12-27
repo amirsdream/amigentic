@@ -3,7 +3,7 @@
  * Redesigned with animated UI and agent visualization
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Toaster } from 'react-hot-toast';
 import { useAuth } from './contexts/AuthContext';
@@ -24,6 +24,13 @@ import { useUIStore, useExecutionStore, useConnectionStore, useChatStore } from 
 
 function App() {
   const { user, isAuthenticated, isGuest, loading } = useAuth();
+  
+  // Memoize user data to prevent unnecessary re-renders
+  const stableUser = useMemo(() => ({
+    username: user?.username,
+    display_name: user?.display_name,
+    avatar_emoji: user?.avatar_emoji,
+  }), [user?.username, user?.display_name, user?.avatar_emoji]);
   
   // Chat store for persistence - only get what we need to avoid re-renders
   const activeConversationId = useChatStore((state) => state.activeConversationId);
@@ -74,17 +81,23 @@ function App() {
       setExecution(data);
     }
     
-    // Save assistant response to chat store when complete
+    // Save assistant response to chat store when complete (for backend persistence)
     if (data.type === 'complete' && data.data?.output) {
       const username = user?.username || 'guest';
+      // Get execution data and ensure token_usage is included
       const executionData = executionRef.current
         ? JSON.parse(JSON.stringify(executionRef.current))
         : null;
       
+      // Add token usage from complete event
+      if (executionData && data.data.token_usage) {
+        executionData.token_usage = data.data.token_usage;
+      }
+      
       addMessage({
         type: 'assistant',
         content: data.data.output,
-        executionData,
+        execution: executionData,
         timestamp: new Date(),
       }, username);
     }
@@ -102,16 +115,23 @@ function App() {
     setConnected(isConnected);
   }, [isConnected, setConnected]);
 
-  // Show login modal if not authenticated
+  // Show login modal if not authenticated (with small delay to prevent flash)
   useEffect(() => {
     if (!loading && !isAuthenticated) {
-      setShowLogin(true);
+      // Small delay to ensure session restore has completed
+      const timer = setTimeout(() => {
+        setShowLogin(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    } else {
+      setShowLogin(false);
     }
   }, [loading, isAuthenticated]);
   
   // Load chats when user logs in
   useEffect(() => {
     if (isAuthenticated && user?.username) {
+      console.log('[App] Loading chats for user:', user.username);
       loadChats(user.username);
     }
   }, [isAuthenticated, user?.username, loadChats]);
@@ -255,7 +275,7 @@ function App() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <Header
-          user={user}
+          user={stableUser}
           isGuest={isGuest}
           isConnected={isConnected}
           showExecutionDetails={showExecutionDetails}

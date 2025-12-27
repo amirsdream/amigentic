@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column,
     String,
     Integer,
+    Float,
     DateTime,
     Text,
     JSON,
@@ -86,6 +87,8 @@ class UserProfile(Base):
     # Stats
     total_queries = Column(Integer, default=0)
     total_agents_executed = Column(Integer, default=0)
+    total_tokens_used = Column(Integer, default=0)
+    total_cost = Column(Float, default=0.0)
 
 
 class ChatSession(Base):
@@ -144,6 +147,42 @@ class Conversation(Base):
 
 # Tables are created via Alembic migrations
 # Do not create tables here - use: alembic upgrade head
+
+
+def run_migrations():
+    """
+    Run database migrations on startup.
+    This ensures the database schema is up-to-date after checkout.
+    """
+    from sqlalchemy import inspect, text
+    
+    logger = logging.getLogger(__name__)
+    
+    # Create tables if they don't exist
+    Base.metadata.create_all(bind=engine)
+    
+    # Get existing columns for user_profiles table
+    inspector = inspect(engine)
+    
+    # Define migrations: (table_name, column_name, column_type, default)
+    migrations = [
+        ("user_profiles", "total_tokens_used", "INTEGER", "0"),
+        ("user_profiles", "total_cost", "REAL", "0.0"),
+    ]
+    
+    with engine.connect() as conn:
+        for table_name, column_name, column_type, default in migrations:
+            try:
+                existing_columns = [col["name"] for col in inspector.get_columns(table_name)]
+                
+                if column_name not in existing_columns:
+                    logger.info(f"Migration: Adding column {column_name} to {table_name}")
+                    conn.execute(text(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {default}"
+                    ))
+                    conn.commit()
+            except Exception as e:
+                logger.warning(f"Migration warning for {table_name}.{column_name}: {e}")
 
 
 def get_db():
@@ -223,6 +262,7 @@ def save_conversation(
     response: str,
     execution_plan: Optional[dict] = None,
     session_id: Optional[str] = None,
+    token_usage: Optional[dict] = None,
 ):
     """Save conversation to database."""
     conversation = Conversation(
@@ -241,6 +281,13 @@ def save_conversation(
         user.total_queries += 1
         if execution_plan:
             user.total_agents_executed += len(execution_plan.get("agents", []))
+        
+        # Update token and cost stats
+        if token_usage:
+            total_tokens = token_usage.get("total_tokens", 0)
+            total_cost = token_usage.get("total_cost", 0.0)
+            user.total_tokens_used = (user.total_tokens_used or 0) + total_tokens
+            user.total_cost = (user.total_cost or 0.0) + total_cost
 
     db.commit()
     return conversation

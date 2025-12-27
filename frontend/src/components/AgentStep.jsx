@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { Loader2, ChevronDown, ChevronUp, Coins } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, Coins, DollarSign } from 'lucide-react';
 
 function AgentStep({ agent, status, index, expanded, onToggle, compact = false }) {
   // Debug: log when status changes
@@ -32,6 +32,8 @@ function AgentStep({ agent, status, index, expanded, onToggle, compact = false }
   // Get token usage for this agent
   const tokenUsage = status?.token_usage;
   const hasTokens = tokenUsage?.total_tokens > 0;
+  const hasCost = tokenUsage?.total_cost > 0;
+  const costFormatted = tokenUsage?.cost_formatted || '$0.00';
 
   return (
     <div
@@ -53,6 +55,12 @@ function AgentStep({ agent, status, index, expanded, onToggle, compact = false }
               <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
                 <Coins className="w-3 h-3" />
                 {tokenUsage.total_tokens.toLocaleString()}
+              </span>
+            )}
+            {hasCost && (
+              <span className="flex items-center gap-0.5 text-xs text-green-600 dark:text-green-400">
+                <DollarSign className="w-3 h-3" />
+                {costFormatted.replace('$', '')}
               </span>
             )}
           </div>
@@ -122,7 +130,14 @@ function AgentStep({ agent, status, index, expanded, onToggle, compact = false }
             {duration && <span>Duration: {duration}s</span>}
             {hasTokens && (
               <span className="text-amber-600 dark:text-amber-400">
-                Tokens: {tokenUsage.prompt_tokens?.toLocaleString() || 0} in / {tokenUsage.completion_tokens?.toLocaleString() || 0} out
+                <Coins className="w-3 h-3 inline mr-1" />
+                {tokenUsage.prompt_tokens?.toLocaleString() || 0} in / {tokenUsage.completion_tokens?.toLocaleString() || 0} out
+              </span>
+            )}
+            {(hasTokens || hasCost) && (
+              <span className="text-green-600 dark:text-green-400">
+                <DollarSign className="w-3 h-3 inline" />
+                {costFormatted.replace('$', '')}
               </span>
             )}
           </div>

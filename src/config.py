@@ -139,13 +139,17 @@ class Config:
 
         return True, None
 
-    def __repr__(self) -> str:
-        """String representation of config."""
-        model = {
+    def get_model_name(self) -> str:
+        """Get the model name for the current provider."""
+        return {
             "ollama": self.ollama_model,
             "openai": self.openai_model,
             "claude": self.anthropic_model,
         }.get(self.llm_provider, "unknown")
+
+    def __repr__(self) -> str:
+        """String representation of config."""
+        model = self.get_model_name()
 
         return (
             f"Config(provider={self.llm_provider}, "

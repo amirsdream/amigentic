@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'Magentic Dashboards'
+    orgId: 1
+    folder: 'Magentic'
+    folderUid: 'magentic'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -13,6 +14,28 @@ from langchain_core.tools import BaseTool
 from ..role_library import RoleLibrary, AgentRole as Role
 from ..config import Config
 from .token_tracker import get_tracker, TokenUsage
+
+# Import metrics (optional)
+try:
+    from ..metrics import (
+        PROMETHEUS_AVAILABLE,
+        AGENT_EXECUTIONS_TOTAL,
+        AGENT_EXECUTION_DURATION,
+        AGENTS_IN_PROGRESS,
+        TOOL_CALLS_TOTAL,
+        TOOL_CALL_DURATION,
+        record_error,
+        record_llm_request,
+    )
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    AGENT_EXECUTIONS_TOTAL = None
+    AGENT_EXECUTION_DURATION = None
+    AGENTS_IN_PROGRESS = None
+    TOOL_CALLS_TOTAL = None
+    TOOL_CALL_DURATION = None
+    record_error = None
+    record_llm_request = None
 
 if TYPE_CHECKING:
     from ..tools.manager import ToolManager
@@ -54,32 +77,88 @@ class AgentExecutor:
         self.context_limit = _config.agent_context_limit
         self.history_limit = _config.agent_history_limit
 
-        # Token tracking for current execution
-        self._current_agent_id: Optional[str] = None
-        self._current_role: Optional[str] = None
+    def _record_agent_start(self) -> float:
+        """Record agent execution start for metrics."""
+        if PROMETHEUS_AVAILABLE and AGENTS_IN_PROGRESS:
+            AGENTS_IN_PROGRESS.inc()
+        return time.perf_counter()
 
-    def set_current_agent(self, agent_id: str, role: str) -> None:
-        """Set the current agent for token tracking.
+    def _record_agent_end(self, agent_type: str, start_time: float, success: bool):
+        """Record agent execution completion for metrics."""
+        if not PROMETHEUS_AVAILABLE:
+            return
+        duration = time.perf_counter() - start_time
+        if AGENTS_IN_PROGRESS:
+            AGENTS_IN_PROGRESS.dec()
+        if AGENT_EXECUTIONS_TOTAL:
+            AGENT_EXECUTIONS_TOTAL.labels(
+                agent_type=agent_type,
+                status='success' if success else 'error'
+            ).inc()
+        if AGENT_EXECUTION_DURATION:
+            AGENT_EXECUTION_DURATION.labels(agent_type=agent_type).observe(duration)
 
+    def _record_tool_call(self, tool_name: str, duration: float, success: bool, error_type: Optional[str] = None):
+        """Record tool call for metrics."""
+        if not PROMETHEUS_AVAILABLE:
+            return
+        if TOOL_CALLS_TOTAL:
+            TOOL_CALLS_TOTAL.labels(
+                tool_name=tool_name,
+                status='success' if success else 'error'
+            ).inc()
+        if TOOL_CALL_DURATION:
+            TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
+        # Optionally record the error
+        if not success and error_type and record_error:
+            record_error(error_type, f'tool_{tool_name}')
+
+    def _record_llm_request(self, duration: float, success: bool):
+        """Record LLM request metrics."""
+        if not PROMETHEUS_AVAILABLE or not record_llm_request:
+            return
+        # Get provider and model from config
+        provider = _config.llm_provider
+        model = _config.get_model_name()
+        record_llm_request(provider, model, duration, success)
+
+    def _invoke_llm(self, messages: list, config: RunnableConfig, llm: Any = None) -> Any:
+        """Invoke LLM with metrics tracking.
+        
         Args:
-            agent_id: Agent identifier
-            role: Agent role name
+            messages: List of messages to send to the LLM
+            config: RunnableConfig for the invocation
+            llm: Optional LLM or LLM with tools to use (defaults to self.llm)
+            
+        Returns:
+            LLM response
         """
-        self._current_agent_id = agent_id
-        self._current_role = role
+        llm_to_use = llm or self.llm
+        start_time = time.time()
+        try:
+            response = llm_to_use.invoke(messages, config=config)
+            self._record_llm_request(time.time() - start_time, True)
+            return response
+        except Exception as e:
+            self._record_llm_request(time.time() - start_time, False)
+            if PROMETHEUS_AVAILABLE and record_error:
+                record_error(type(e).__name__, 'llm')
+            raise
 
-    def _track_tokens(self, response: Any) -> TokenUsage:
+    def _track_tokens(self, response: Any, agent_id: str = "", role: str = "") -> TokenUsage:
         """Track tokens from an LLM response.
 
         Args:
             response: LLM response object
+            agent_id: Agent identifier
+            role: Agent role name
 
         Returns:
             TokenUsage extracted from response
         """
         tracker = get_tracker()
-        if self._current_agent_id and self._current_role:
-            return tracker.add_agent_usage(self._current_agent_id, self._current_role, response)
+        if agent_id and role:
+            return tracker.add_agent_usage(agent_id, role, response)
         return tracker.extract_usage_from_response(response)
 
     async def pre_cache_role_tools(self) -> None:
@@ -172,6 +251,7 @@ class AgentExecutor:
         depth: int = 0,
         max_depth: int = 3,
         process_query_callback: Optional[Callable] = None,
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Execute a single agent.
 
@@ -184,10 +264,43 @@ class AgentExecutor:
             depth: Current execution depth
             max_depth: Maximum execution depth
             process_query_callback: Callback for recursive delegation
+            agent_id: Agent identifier for token tracking
 
         Returns:
             Dict with 'content' (text output) and 'tool_calls' (list of tools used)
         """
+        # Start metrics tracking
+        start_time = self._record_agent_start()
+        success = False
+        
+        try:
+            result = self._execute_internal(
+                role, task, original_query, previous_outputs,
+                conversation_history, depth, max_depth,
+                process_query_callback, agent_id
+            )
+            success = True
+            return result
+        except Exception as e:
+            if PROMETHEUS_AVAILABLE and record_error:
+                record_error(type(e).__name__, f'agent_{role.name}')
+            raise
+        finally:
+            self._record_agent_end(role.name, start_time, success)
+
+    def _execute_internal(
+        self,
+        role: Role,
+        task: str,
+        original_query: str,
+        previous_outputs: List[str],
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        depth: int = 0,
+        max_depth: int = 3,
+        process_query_callback: Optional[Callable] = None,
+        agent_id: str = "",
+    ) -> Dict[str, Any]:
+        """Internal execute implementation."""
         # Build context
         context = self._build_context(original_query, previous_outputs, conversation_history)
 
@@ -210,10 +323,10 @@ class AgentExecutor:
 
         # Execute with or without tools
         if role.needs_tools:
-            return self._execute_with_tools(role, system_msg, task_msg, config)
+            return self._execute_with_tools(role, system_msg, task_msg, config, agent_id)
         else:
             return self._execute_without_tools(
-                role, system_msg, task_msg, config, task, depth, max_depth, process_query_callback
+                role, system_msg, task_msg, config, task, depth, max_depth, process_query_callback, agent_id
             )
 
     def _build_context(
@@ -284,7 +397,7 @@ IMPORTANT: If completing directly, keep your response under {self.ui_display_lim
         }  # type: ignore
 
     def _execute_with_tools(
-        self, role: Role, system_msg: SystemMessage, task_msg: HumanMessage, config: RunnableConfig
+        self, role: Role, system_msg: SystemMessage, task_msg: HumanMessage, config: RunnableConfig, agent_id: str = ""
     ) -> Dict[str, Any]:
         """Execute agent with tool access."""
         # Get role-specific tools
@@ -292,17 +405,18 @@ IMPORTANT: If completing directly, keep your response under {self.ui_display_lim
 
         if not role_tools:
             logger.error(f"⚠️ {role.name} needs tools but no tools are available!")
-            response = self.llm.invoke([system_msg, task_msg], config=config)
+            response = self._invoke_llm([system_msg, task_msg], config)
+            self._track_tokens(response, agent_id, role.name)  # Track token usage
             return {"content": str(response.content), "tool_calls": []}
 
         logger.info(f"🔧 {role.name} has access to {len(role_tools)} tools")
 
         # Special handling for researcher role
         if role.name == "researcher":
-            return self._execute_researcher(role, system_msg, task_msg, config, role_tools)
+            return self._execute_researcher(role, system_msg, task_msg, config, role_tools, agent_id)
 
         # Standard tool calling for other roles
-        return self._execute_standard_tool_calling(role, system_msg, task_msg, config, role_tools)
+        return self._execute_standard_tool_calling(role, system_msg, task_msg, config, role_tools, agent_id)
 
     def _execute_researcher(
         self,
@@ -311,6 +425,7 @@ IMPORTANT: If completing directly, keep your response under {self.ui_display_lim
         task_msg: HumanMessage,
         config: RunnableConfig,
         role_tools: List[BaseTool],
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Execute researcher agent with web search."""
         logger.info(f"🔍 {role.name} will perform web search")
@@ -323,8 +438,8 @@ Just output the search queries, nothing else. No explanations, no numbering.
 IMPORTANT: Keep search queries short and focused."""
         )
 
-        search_response = self.llm.invoke([search_prompt, task_msg], config=config)
-        self._track_tokens(search_response)  # Track token usage
+        search_response = self._invoke_llm([search_prompt, task_msg], config)
+        self._track_tokens(search_response, agent_id, role.name)  # Track token usage
         search_queries = str(search_response.content).strip().split("\n")
         search_queries = [q.strip() for q in search_queries if q.strip()][:3]
 
@@ -334,8 +449,8 @@ IMPORTANT: Keep search queries short and focused."""
         search_tool = self._find_search_tool(role_tools)
         if not search_tool:
             logger.error("   └─ No search tool found!")
-            response = self.llm.invoke([system_msg, task_msg], config=config)
-            self._track_tokens(response)  # Track token usage
+            response = self._invoke_llm([system_msg, task_msg], config)
+            self._track_tokens(response, agent_id, role.name)  # Track token usage
             return {"content": str(response.content), "tool_calls": []}
 
         # Execute searches
@@ -348,7 +463,7 @@ IMPORTANT: Keep search queries short and focused."""
             )
             logger.info(f"📥 {role.name} processing {len(tool_results)} search result(s)")
 
-            final_response = self.llm.invoke(
+            final_response = self._invoke_llm(
                 [
                     system_msg,
                     task_msg,
@@ -358,9 +473,9 @@ IMPORTANT: Keep search queries short and focused."""
                         f"{self.ui_display_limit} characters - be concise and focused on key findings."
                     ),
                 ],
-                config=config,
+                config,
             )
-            self._track_tokens(final_response)  # Track token usage
+            self._track_tokens(final_response, agent_id, role.name)  # Track token usage
 
             return {
                 "content": str(final_response.content),
@@ -370,8 +485,8 @@ IMPORTANT: Keep search queries short and focused."""
             }
 
         # No results - fallback
-        response = self.llm.invoke([system_msg, task_msg], config=config)
-        self._track_tokens(response)  # Track token usage
+        response = self._invoke_llm([system_msg, task_msg], config)
+        self._track_tokens(response, agent_id, role.name)  # Track token usage
         return {"content": str(response.content), "tool_calls": []}
 
     def _find_search_tool(self, role_tools: List[BaseTool]) -> Optional[BaseTool]:
@@ -404,13 +519,19 @@ IMPORTANT: Keep search queries short and focused."""
             query = query.lstrip("0123456789.-) ").strip()
             if not query:
                 continue
+            start_time = time.time()
             try:
                 logger.info(f"   └─ Searching: {query}")
                 result = search_tool.invoke({"query": query})
+                duration = time.time() - start_time
+                success = result is not None
+                self._record_tool_call(search_tool.name, duration, success)
                 if result:
                     results.append(result)
                     logger.info(f"🔍 SEARCH RESULT for '{query}': {result[:200]}...")
             except Exception as e:
+                duration = time.time() - start_time
+                self._record_tool_call(search_tool.name, duration, False, type(e).__name__)
                 logger.error(f"   └─ Search error for '{query}': {e}")
                 results.append(f"Search failed for '{query}': {e}")
         return results
@@ -422,6 +543,7 @@ IMPORTANT: Keep search queries short and focused."""
         task_msg: HumanMessage,
         config: RunnableConfig,
         role_tools: List[BaseTool],
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Execute agent with standard tool calling."""
         llm_with_tools = self.llm.bind_tools(role_tools)
@@ -429,12 +551,12 @@ IMPORTANT: Keep search queries short and focused."""
             f"🔧 {role.name} bound with {len(role_tools)} tools: {[t.name for t in role_tools[:5]]}..."
         )
 
-        response = llm_with_tools.invoke([system_msg, task_msg], config=config)
-        self._track_tokens(response)  # Track token usage
+        response = self._invoke_llm([system_msg, task_msg], config, llm=llm_with_tools)
+        self._track_tokens(response, agent_id, role.name)  # Track token usage
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             return self._process_tool_calls(
-                role, system_msg, task_msg, response, config, role_tools
+                role, system_msg, task_msg, response, config, role_tools, agent_id
             )
 
         return {"content": str(response.content), "tool_calls": []}
@@ -447,6 +569,7 @@ IMPORTANT: Keep search queries short and focused."""
         response,
         config: RunnableConfig,
         role_tools: List[BaseTool],
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Process tool calls from LLM response."""
         logger.info(f"🔍 {role.name} is calling {len(response.tool_calls)} tool(s)")
@@ -466,7 +589,7 @@ IMPORTANT: Keep search queries short and focused."""
 
         if tool_results:
             tool_context = "\n\n".join([f"Result {i+1}:\n{r}" for i, r in enumerate(tool_results)])
-            final_response = self.llm.invoke(
+            final_response = self._invoke_llm(
                 [
                     system_msg,
                     task_msg,
@@ -474,9 +597,9 @@ IMPORTANT: Keep search queries short and focused."""
                         content=f"Based on these results:\n\n{tool_context}\n\nProvide a comprehensive answer."
                     ),
                 ],
-                config=config,
+                config,
             )
-            self._track_tokens(final_response)  # Track token usage
+            self._track_tokens(final_response, agent_id, role.name)  # Track token usage
             return {"content": str(final_response.content), "tool_calls": recorded_calls}
 
         return {"content": str(response.content), "tool_calls": recorded_calls}
@@ -496,10 +619,16 @@ IMPORTANT: Keep search queries short and focused."""
         """Execute a single tool by name from role-specific tools."""
         for tool in role_tools:
             if tool.name == tool_name:
+                start_time = time.time()
                 try:
                     logger.info(f"   └─ Executing {tool_name}...")
-                    return tool.invoke(tool_args)
+                    result = tool.invoke(tool_args)
+                    duration = time.time() - start_time
+                    self._record_tool_call(tool_name, duration, True)
+                    return result
                 except Exception as e:
+                    duration = time.time() - start_time
+                    self._record_tool_call(tool_name, duration, False, type(e).__name__)
                     logger.error(f"   └─ Tool error: {e}")
                     return f"Error executing {tool_name}: {e}"
 
@@ -516,16 +645,17 @@ IMPORTANT: Keep search queries short and focused."""
         depth: int,
         max_depth: int,
         process_query_callback: Optional[Callable],
+        agent_id: str = "",
     ) -> Dict[str, Any]:
         """Execute agent without tools."""
-        response = self.llm.invoke([system_msg, task_msg], config=config)
-        self._track_tokens(response)  # Track token usage
+        response = self._invoke_llm([system_msg, task_msg], config)
+        self._track_tokens(response, agent_id, role.name)  # Track token usage
         response_content = str(response.content)
 
         # Check for delegation
         if role.can_delegate and depth < max_depth and process_query_callback:
             delegation_result = self._handle_delegation(
-                response_content, task, system_msg, config, depth, max_depth, process_query_callback
+                response_content, task, system_msg, config, depth, max_depth, process_query_callback, agent_id, role.name
             )
             if delegation_result:
                 return delegation_result
@@ -541,6 +671,8 @@ IMPORTANT: Keep search queries short and focused."""
         depth: int,
         max_depth: int,
         process_query_callback: Callable,
+        agent_id: str = "",
+        role_name: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Handle delegation requests from agents."""
         try:
@@ -572,8 +704,8 @@ Sub-agent results:
 Combine these results to complete your original task."""
                 )
 
-                final_response = self.llm.invoke([system_msg, synthesis_msg], config=config)
-                self._track_tokens(final_response)  # Track token usage
+                final_response = self._invoke_llm([system_msg, synthesis_msg], config)
+                self._track_tokens(final_response, agent_id, role_name)  # Track token usage
                 return {"content": str(final_response.content), "tool_calls": []}
 
         except json.JSONDecodeError:

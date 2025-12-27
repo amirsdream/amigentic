@@ -69,6 +69,9 @@ opentelemetry-sdk>=1.39.0
 opentelemetry-exporter-otlp>=1.39.0
 opentelemetry-exporter-otlp-proto-http>=1.39.0
 
+# Prometheus metrics (optional - enable with ENABLE_METRICS=true)
+prometheus-client>=0.19.0
+
 # ============================================================================
 # Web UI & API
 # ============================================================================
@@ -91,6 +94,12 @@ sqlalchemy>=2.0.0
 alembic>=1.13.0
 passlib>=1.7.4
 bcrypt>=4.1.0,<5.0
+python-multipart>=0.0.9  # For form data in auth endpoints
+pydantic>=2.0.0
+
+# FastAPI Users - Complete auth solution
+fastapi-users[sqlalchemy]>=14.0.0
+aiosqlite>=0.20.0  # Async SQLite support
 
 # ============================================================================
 # Development Tools (optional)

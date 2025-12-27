@@ -443,9 +443,7 @@ class MetaAgentSystem:
 
         conv_hist = conversation_history if conversation_history is not None else []
 
-        # Set current agent for token tracking
-        self.agent_executor.set_current_agent(agent_id, role)
-
+        # Execute agent in thread pool with agent_id for token tracking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
@@ -458,6 +456,7 @@ class MetaAgentSystem:
             0,
             3,
             self.process_query,
+            agent_id,  # Pass agent_id for token tracking
         )
 
         logger.info(f"✅ {agent_id} ({role}) completed")

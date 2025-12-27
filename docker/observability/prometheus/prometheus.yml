@@ -1,0 +1,80 @@
+# Prometheus Configuration for Magentic
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ============================================
+  # Main Application
+  # ============================================
+  
+  # Magentic API (main app)
+  # On Linux, use 172.17.0.1 (docker0 bridge) or host network mode
+  # On Mac/Windows, use host.docker.internal
+  - job_name: 'magentic-api'
+    static_configs:
+      - targets: ['172.17.0.1:8000']  # Docker bridge gateway to host
+    metrics_path: /metrics
+
+  # ============================================
+  # MCP Infrastructure
+  # ============================================
+
+  # MCP Gateway
+  - job_name: 'mcp-gateway'
+    static_configs:
+      - targets: ['mcp-gateway:9000']
+    metrics_path: /metrics
+
+  # MCP Database Server
+  - job_name: 'mcp-database'
+    static_configs:
+      - targets: ['mcp-database:8000']
+    metrics_path: /metrics
+
+  # MCP Web Search Server
+  - job_name: 'mcp-websearch'
+    static_configs:
+      - targets: ['mcp-websearch:8000']
+    metrics_path: /metrics
+
+  # MCP Filesystem Server
+  - job_name: 'mcp-filesystem'
+    static_configs:
+      - targets: ['mcp-filesystem:8000']
+    metrics_path: /metrics
+
+  # MCP Memory Server
+  - job_name: 'mcp-memory'
+    static_configs:
+      - targets: ['mcp-memory:8000']
+    metrics_path: /metrics
+
+  # MCP Python Exec Server
+  - job_name: 'mcp-python'
+    static_configs:
+      - targets: ['mcp-python:8000']
+    metrics_path: /metrics
+
+  # MCP GitHub Server
+  - job_name: 'mcp-github'
+    static_configs:
+      - targets: ['mcp-github:8000']
+    metrics_path: /metrics
+
+  # Docker containers (via cAdvisor)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']

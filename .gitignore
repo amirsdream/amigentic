@@ -73,10 +73,12 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments and secrets
 .env
 .env.local
 .env.*.local
+.jwt_secret
+data/.jwt_secret
 .venv
 venv/
 ENV/
@@ -139,6 +141,8 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
+*secret*
+*pass*
 
 # Database
 *.db

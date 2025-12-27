@@ -621,6 +621,15 @@ start_api() {
         log_warning "Running without MCP (Docker not running)"
     fi
     
+    # Check if metrics should be enabled (from .env or default to true)
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+        source "$SCRIPT_DIR/.env" 2>/dev/null || true
+    fi
+    export ENABLE_METRICS=${ENABLE_METRICS:-true}
+    if [[ "$ENABLE_METRICS" == "true" ]]; then
+        log_info "Prometheus metrics enabled (/metrics endpoint)"
+    fi
+    
     mkdir -p "$DATA_DIR"
     
     # Start API in background
@@ -670,7 +679,7 @@ start_frontend() {
     echo $! > "$DATA_DIR/.frontend.pid"
     
     sleep 3
-    log_success "Frontend running at http://localhost:5173"
+    log_success "Frontend running at http://localhost:8081"
     cd "$SCRIPT_DIR"
 }
 
@@ -684,6 +693,188 @@ stop_frontend() {
 }
 
 # ============================================
+# Observability Stack (Prometheus, Grafana, Loki)
+# ============================================
+
+start_observability() {
+    if ! check_docker; then
+        log_error "Docker is required for observability stack"
+        return 1
+    fi
+    
+    echo
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}           Observability Stack${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo
+    
+    local compose_cmd=$(get_compose_cmd)
+    cd "$DOCKER_DIR"
+    
+    log_info "Starting Prometheus, Grafana, Loki, Promtail, cAdvisor..."
+    echo
+    
+    # Start services with visible output
+    echo -e "  ${BLUE}⠋${NC} Pulling/starting containers..."
+    if $compose_cmd --profile observability up -d prometheus loki promtail grafana cadvisor 2>&1; then
+        echo
+        
+        # Wait for Prometheus
+        echo -ne "  ${BLUE}⠋${NC} Waiting for Prometheus..."
+        local prometheus_ready=false
+        for i in {1..30}; do
+            if curl -sf "http://localhost:9090/-/healthy" > /dev/null 2>&1; then
+                prometheus_ready=true
+                echo -e "\r  ${GREEN}✓${NC} Prometheus ready              "
+                break
+            fi
+            echo -ne "\r  ${BLUE}⠋${NC} Waiting for Prometheus... ($i/30)"
+            sleep 1
+        done
+        if ! $prometheus_ready; then
+            echo -e "\r  ${YELLOW}⚠${NC} Prometheus still starting...     "
+        fi
+        
+        # Wait for Grafana
+        echo -ne "  ${BLUE}⠋${NC} Waiting for Grafana..."
+        local grafana_ready=false
+        for i in {1..30}; do
+            if curl -sf "http://localhost:3000/api/health" > /dev/null 2>&1; then
+                grafana_ready=true
+                echo -e "\r  ${GREEN}✓${NC} Grafana ready                  "
+                break
+            fi
+            echo -ne "\r  ${BLUE}⠋${NC} Waiting for Grafana... ($i/30)"
+            sleep 1
+        done
+        if ! $grafana_ready; then
+            echo -e "\r  ${YELLOW}⚠${NC} Grafana still starting...       "
+        fi
+        
+        # Wait for Loki
+        echo -ne "  ${BLUE}⠋${NC} Waiting for Loki..."
+        local loki_ready=false
+        for i in {1..20}; do
+            if curl -sf "http://localhost:3100/ready" > /dev/null 2>&1; then
+                loki_ready=true
+                echo -e "\r  ${GREEN}✓${NC} Loki ready                     "
+                break
+            fi
+            echo -ne "\r  ${BLUE}⠋${NC} Waiting for Loki... ($i/20)"
+            sleep 1
+        done
+        if ! $loki_ready; then
+            echo -e "\r  ${YELLOW}⚠${NC} Loki still starting...          "
+        fi
+        
+        echo
+        if $prometheus_ready && $grafana_ready; then
+            log_success "Observability stack is running!"
+            echo
+            echo -e "  ${CYAN}Prometheus:${NC} http://localhost:9090"
+            echo -e "  ${CYAN}Grafana:${NC}    http://localhost:3000 (admin/magentic123)"
+            echo -e "  ${CYAN}Loki:${NC}       http://localhost:3100"
+            echo
+            echo -e "  ${BLUE}ℹ${NC} Metrics endpoint: http://localhost:$API_PORT/metrics"
+            echo -e "  ${BLUE}ℹ${NC} Data persisted to Docker volumes"
+        else
+            log_warning "Some services still starting - check ./magentic.sh metrics-status"
+        fi
+        echo
+    else
+        log_error "Failed to start observability stack"
+        cd "$SCRIPT_DIR"
+        return 1
+    fi
+    
+    cd "$SCRIPT_DIR"
+    return 0
+}
+
+stop_observability() {
+    if ! check_docker_silent; then
+        return 0
+    fi
+    
+    log_info "Stopping observability stack..."
+    
+    local compose_cmd=$(get_compose_cmd)
+    local docker_cmd="${compose_cmd%% *}"  # Extract docker command
+    cd "$DOCKER_DIR"
+    
+    # Use 'down' instead of 'stop' to properly remove containers and network references
+    echo -ne "  ${BLUE}⠋${NC} Stopping and removing observability containers..."
+    $compose_cmd --profile observability down --remove-orphans 2>/dev/null
+    echo -e "\r  ${GREEN}✓${NC} Observability containers removed              "
+    
+    # Prune any orphaned networks
+    echo -ne "  ${BLUE}⠋${NC} Cleaning up networks..."
+    $docker_cmd network prune -f > /dev/null 2>&1 || true
+    echo -e "\r  ${GREEN}✓${NC} Networks cleaned up                          "
+    
+    echo
+    log_success "Observability stack stopped"
+    echo -e "  ${BLUE}ℹ${NC} Data is preserved in Docker volumes"
+    cd "$SCRIPT_DIR"
+}
+
+observability_status() {
+    echo
+    echo -e "${CYAN}Observability Stack Status${NC}"
+    echo
+    
+    echo -n "  Prometheus: "
+    if curl -sf "http://localhost:9090/-/healthy" > /dev/null 2>&1; then
+        echo -e "${GREEN}Running${NC} (http://localhost:9090)"
+    else
+        echo -e "${YELLOW}Not running${NC}"
+    fi
+    
+    echo -n "  Grafana:    "
+    if curl -sf "http://localhost:3000/api/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}Running${NC} (http://localhost:3000)"
+    else
+        echo -e "${YELLOW}Not running${NC}"
+    fi
+    
+    echo -n "  Loki:       "
+    if curl -sf "http://localhost:3100/ready" > /dev/null 2>&1; then
+        echo -e "${GREEN}Running${NC} (http://localhost:3100)"
+    else
+        echo -e "${YELLOW}Not running${NC}"
+    fi
+    
+    echo -n "  cAdvisor:   "
+    if curl -sf "http://localhost:8081/healthz" > /dev/null 2>&1; then
+        echo -e "${GREEN}Running${NC} (http://localhost:8081)"
+    else
+        echo -e "${YELLOW}Not running${NC}"
+    fi
+    
+    echo
+    echo -n "  Metrics Endpoint: "
+    if curl -sf "http://localhost:$API_PORT/metrics" > /dev/null 2>&1; then
+        echo -e "${GREEN}Available${NC} (http://localhost:$API_PORT/metrics)"
+    else
+        echo -e "${YELLOW}Unavailable${NC} - set ENABLE_METRICS=true and restart API"
+    fi
+    
+    echo
+    
+    # Show volume info
+    if check_docker_silent; then
+        echo "  Data Volumes:"
+        for vol in prometheus-data grafana-data loki-data; do
+            if docker volume inspect "$vol" > /dev/null 2>&1; then
+                local size=$(docker system df -v 2>/dev/null | grep "$vol" | awk '{print $3}' || echo "N/A")
+                echo -e "    - ${vol}: ${GREEN}exists${NC}"
+            fi
+        done
+    fi
+    echo
+}
+
+# ============================================
 # Full Stack Management
 # ============================================
 
@@ -691,6 +882,11 @@ start_all() {
     print_banner
     log_info "Starting all Magentic services..."
     echo
+    
+    # Load .env to check settings
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+        source "$SCRIPT_DIR/.env" 2>/dev/null || true
+    fi
     
     # 1. Initialize database
     init_database
@@ -700,11 +896,18 @@ start_all() {
     start_mcp || true
     echo
     
-    # 3. Start API
+    # 3. Start Observability stack if ENABLE_METRICS=true and Docker available
+    if [[ "${ENABLE_METRICS:-false}" == "true" ]] && check_docker_silent; then
+        log_info "Starting observability stack (ENABLE_METRICS=true)..."
+        start_observability || true
+        echo
+    fi
+    
+    # 4. Start API
     start_api
     echo
     
-    # 4. Start Frontend (optional)
+    # 5. Start Frontend (optional)
     if [[ -d "$SCRIPT_DIR/frontend" ]]; then
         start_frontend
         echo
@@ -716,9 +919,20 @@ start_all() {
     log_success "Magentic is ready!"
     echo
     echo -e "  ${CYAN}API:${NC}      http://localhost:$API_PORT"
-    echo -e "  ${CYAN}Frontend:${NC} http://localhost:5173"
+    echo -e "  ${CYAN}Frontend:${NC} http://localhost:8081"
     if is_mcp_running; then
         echo -e "  ${CYAN}MCP:${NC}      http://localhost:$MCP_GATEWAY_PORT"
+    fi
+    echo -e "  ${CYAN}Metrics:${NC}    http://localhost:$API_PORT/metrics"
+    echo
+    echo -e "  ${CYAN}Observability:${NC}"
+    if curl -sf "http://localhost:9090/-/healthy" > /dev/null 2>&1; then
+        echo -e "    Prometheus: http://localhost:9090 ${GREEN}(running)${NC}"
+        echo -e "    Grafana:    http://localhost:3000 ${GREEN}(running)${NC} - admin/magentic123"
+    else
+        echo -e "    Prometheus: http://localhost:9090 ${YELLOW}(not running)${NC}"
+        echo -e "    Grafana:    http://localhost:3000 ${YELLOW}(not running)${NC} - admin/magentic123"
+        echo -e "    ${BLUE}ℹ${NC} Run ${YELLOW}./magentic.sh metrics${NC} to start"
     fi
     echo
     echo -e "  Run ${YELLOW}./magentic.sh cli${NC} for interactive mode"
@@ -732,6 +946,7 @@ stop_all() {
     
     stop_frontend
     stop_api
+    stop_observability 2>/dev/null || true
     stop_mcp
     
     echo
@@ -817,7 +1032,7 @@ show_status() {
     if [[ -f "$DATA_DIR/.frontend.pid" ]]; then
         local pid=$(cat "$DATA_DIR/.frontend.pid")
         if ps -p "$pid" > /dev/null 2>&1; then
-            echo -e "  Frontend:  ${GREEN}●${NC} Running (port 5173)"
+            echo -e "  Frontend:  ${GREEN}●${NC} Running (port 8081)"
         else
             echo -e "  Frontend:  ${RED}○${NC} Stopped"
         fi
@@ -1593,9 +1808,10 @@ OPENAI_MODEL=gpt-4o
 ANTHROPIC_API_KEY=$anthropic_key
 ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 
-# Observability
+# Observability & Metrics
 PHOENIX_PORT=6006
 ENABLE_OBSERVABILITY=false
+ENABLE_METRICS=true
 MAX_INPUT_LENGTH=1000
 
 # Multi-Agent Configuration
@@ -1698,6 +1914,11 @@ show_help() {
     echo "  frontend          Start frontend dev server"
     echo "  frontend-stop     Stop frontend"
     echo
+    echo -e "${CYAN}Observability (Optional):${NC}"
+    echo "  metrics           Start observability stack (Prometheus, Grafana, Loki)"
+    echo "  metrics-stop      Stop observability stack"
+    echo "  metrics-status    Show observability status"
+    echo
     echo -e "${CYAN}Database:${NC}"
     echo "  db-init           Initialize/migrate database"
     echo "  db-reset          Reset database (deletes all data)"
@@ -1749,10 +1970,33 @@ health_check() {
     
     # Frontend
     echo -n "Frontend: "
-    if curl -sf "http://localhost:5173" > /dev/null 2>&1; then
+    if curl -sf "http://localhost:8081" > /dev/null 2>&1; then
         echo -e "${GREEN}OK${NC}"
     else
         echo -e "${RED}Unavailable${NC}"
+    fi
+    
+    # Metrics endpoint
+    echo -n "Metrics: "
+    if curl -sf "http://localhost:$API_PORT/metrics" > /dev/null 2>&1; then
+        echo -e "${GREEN}OK (http://localhost:$API_PORT/metrics)${NC}"
+    else
+        echo -e "${YELLOW}Disabled${NC} (set ENABLE_METRICS=true)"
+    fi
+    
+    # Observability stack
+    echo -n "Prometheus: "
+    if curl -sf "http://localhost:9090/-/healthy" > /dev/null 2>&1; then
+        echo -e "${GREEN}OK (http://localhost:9090)${NC}"
+    else
+        echo -e "${YELLOW}Not running${NC} (run: ./magentic.sh metrics)"
+    fi
+    
+    echo -n "Grafana: "
+    if curl -sf "http://localhost:3000/api/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}OK (http://localhost:3000)${NC}"
+    else
+        echo -e "${YELLOW}Not running${NC} (run: ./magentic.sh metrics)"
     fi
     
     echo
@@ -1815,6 +2059,17 @@ main() {
             ;;
         frontend-stop|ui-stop)
             stop_frontend
+            ;;
+        
+        # Observability
+        metrics|observability)
+            start_observability
+            ;;
+        metrics-stop|observability-stop)
+            stop_observability
+            ;;
+        metrics-status|observability-status)
+            observability_status
             ;;
         
         # Database

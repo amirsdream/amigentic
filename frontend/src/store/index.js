@@ -18,11 +18,14 @@ export const useChatStore = create(
       // Load chats from backend
       loadChats: async (username) => {
         if (!username) return;
+        console.log('[ChatStore] loadChats called for:', username);
         set({ isLoading: true });
         try {
           const response = await fetch(`${API_URL}/chats/${username}`);
+          console.log('[ChatStore] loadChats response status:', response.status);
           if (response.ok) {
             const data = await response.json();
+            console.log('[ChatStore] loadChats data:', data);
             const { activeConversationId } = get();
             
             const loadedConversations = data.chats.map(chat => ({
