@@ -149,8 +149,8 @@ async def main_async() -> int:
     tools = await tool_manager.initialize_tools()
     logger.info(f"✓ Loaded {len(tools)} tools")
 
-    # Initialize meta-agent system with tool manager for role-specific MCP tools
-    meta_system = MetaAgentSystem(config, tools, tool_manager=tool_manager)
+    # Initialize meta-agent system with RAG for active retrieval and tool manager
+    meta_system = MetaAgentSystem(config, tools, rag_service=rag_service, tool_manager=tool_manager)
     logger.info("✓ Meta-agent system initialized")
 
     # Pre-cache MCP tools for all roles to avoid async/sync issues during execution

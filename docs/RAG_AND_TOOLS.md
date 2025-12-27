@@ -2,6 +2,33 @@
 
 ## RAG (Retrieval-Augmented Generation)
 
+### Overview
+
+Magentic provides **two modes** of RAG integration:
+
+1. **Active RAG** (Automatic): Knowledge base context is automatically injected into the planning phase
+2. **Passive RAG** (Tool-based): Agents can explicitly search via `search_knowledge_base` tool
+
+### Active RAG
+
+When RAG is enabled, every query automatically searches the knowledge base and injects relevant context before planning:
+
+```
+Query → RAG Search → Enriched Query → MetaCoordinator → Better Plan
+```
+
+**Benefits:**
+- Coordinator makes more informed decisions about which agents to spawn
+- Relevant context is available from the start (not discovered mid-execution)
+- No explicit tool call required
+
+**Configuration:**
+```bash
+# .env
+ENABLE_RAG=true
+# Active RAG uses: top 3 documents with relevance score >= 0.5
+```
+
 ### Setup
 
 ```bash
@@ -16,7 +43,7 @@ docker run -p 6333:6333 qdrant/qdrant
 
 ```bash
 # .env
-RAG_ENABLED=true
+ENABLE_RAG=true
 RAG_VECTOR_STORE=qdrant          # or "chroma"
 RAG_EMBEDDING_MODEL=all-MiniLM-L6-v2
 QDRANT_URL=http://localhost:6333  # for Qdrant
@@ -34,9 +61,9 @@ rag.add_documents([
 ])
 ```
 
-### Usage
+### Passive RAG (Tool)
 
-RAG is automatically available to agents via the `search_knowledge_base` tool.
+Agents can also explicitly call the `search_knowledge_base` tool during execution to search for specific information.
 
 ---
 

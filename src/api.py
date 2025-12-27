@@ -144,8 +144,8 @@ async def startup_event():
     tools = await tool_manager.initialize_tools()
     logger.info(f"✓ Loaded {len(tools)} tools")
 
-    # Initialize meta-agent system with tool manager for role-specific MCP tools
-    meta_system = MetaAgentSystem(config, tools, tool_manager=tool_manager)
+    # Initialize meta-agent system with RAG for active retrieval and tool manager
+    meta_system = MetaAgentSystem(config, tools, rag_service=rag_service, tool_manager=tool_manager)
     logger.info("✓ Meta-agent system initialized")
 
     # Initialize executor
@@ -316,9 +316,10 @@ class AddMessageRequest(BaseModel):
 async def create_chat(request: CreateChatRequest, db: Session = Depends(get_db)):
     """Create a new chat session."""
     user = get_or_create_user(db, request.username)
-    session_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{user.id}"
+    user_id = int(user.id)  # type: ignore[arg-type]
+    session_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{user_id}"
 
-    session = create_chat_session(db, user.id, session_id, request.title)
+    session = create_chat_session(db, user_id, session_id, request.title)
 
     return {
         "success": True,
@@ -336,7 +337,7 @@ async def create_chat(request: CreateChatRequest, db: Session = Depends(get_db))
 async def get_user_chats(username: str, limit: int = 50, db: Session = Depends(get_db)):
     """Get all chat sessions for a user."""
     user = get_or_create_user(db, username)
-    sessions = get_user_chat_sessions(db, user.id, limit)
+    sessions = get_user_chat_sessions(db, int(user.id), limit)  # type: ignore[arg-type]
 
     return {
         "username": username,

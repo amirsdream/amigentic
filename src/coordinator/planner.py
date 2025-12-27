@@ -3,7 +3,7 @@
 import logging
 import json
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -16,21 +16,31 @@ from .plan import ExecutionPlan
 from .prompts import COORDINATOR_SYSTEM_PROMPT
 from .validators import fix_synthesizer_dependencies, validate_plan_logic, fix_plan_logic
 
+if TYPE_CHECKING:
+    from ..services.rag import RAGService
+
 logger = logging.getLogger(__name__)
 
 
 class MetaCoordinator:
     """Meta-coordinator that plans and manages dynamic agent execution."""
 
-    def __init__(self, config: Config, llm: BaseChatModel):
+    def __init__(
+        self,
+        config: Config,
+        llm: BaseChatModel,
+        rag_service: Optional["RAGService"] = None,
+    ):
         """Initialize meta-coordinator.
 
         Args:
             config: Application configuration.
             llm: The configured language model to use.
+            rag_service: Optional RAG service for active knowledge retrieval.
         """
         self.config = config
         self.llm = llm
+        self.rag_service = rag_service
         self.role_library = RoleLibrary()
         self._warmed_up = False
 
@@ -71,16 +81,25 @@ class MetaCoordinator:
 
         logger.info(f"📋 Creating execution plan for: {query[:100]}...")
 
+        # === ACTIVE RAG: Auto-inject relevant knowledge base context ===
+        rag_context = None
+        if self.rag_service:
+            rag_context = self.rag_service.get_relevant_context_for_planning(
+                query, k=3, min_score=0.5
+            )
+            if rag_context:
+                logger.info("📚 RAG context injected into planning phase")
+
         # Build system prompt
         roles_str = ", ".join(self.role_library.list_roles())
         system_prompt = COORDINATOR_SYSTEM_PROMPT.format(roles=roles_str)
 
-        # Build human message
+        # Build human message with optional RAG context
         human_content = query
+        if rag_context:
+            human_content = f"{rag_context}\n\n{query}"
         if conversation_history:
-            human_content = (
-                f"CONVERSATION HISTORY:\n{conversation_history}\n\nCURRENT QUESTION:\n{query}"
-            )
+            human_content = f"CONVERSATION HISTORY:\n{conversation_history}\n\nCURRENT QUESTION:\n{human_content}"
 
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=human_content)]
 

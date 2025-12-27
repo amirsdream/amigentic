@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
 from langchain_core.tools import BaseTool
@@ -16,6 +16,9 @@ from .executor import AgentExecutor
 
 from ..tools.manager import ToolManager
 
+if TYPE_CHECKING:
+    from ..services.rag import RAGService
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,17 +26,23 @@ class MetaAgentSystem:
     """Dynamic meta-agent system."""
 
     def __init__(
-        self, config: Config, tools: List[BaseTool], tool_manager: Optional[ToolManager] = None
+        self,
+        config: Config,
+        tools: List[BaseTool],
+        rag_service: Optional["RAGService"] = None,
+        tool_manager: Optional[ToolManager] = None,
     ):
         """Initialize meta-agent system.
 
         Args:
             config: Application configuration.
             tools: Available tools.
+            rag_service: Optional RAG service for active knowledge retrieval.
             tool_manager: Optional tool manager for role-specific MCP tools.
         """
         self.config = config
         self.tools = tools
+        self.rag_service = rag_service
         self.tool_manager = tool_manager
         self.role_library = RoleLibrary()
 
@@ -41,8 +50,8 @@ class MetaAgentSystem:
         self.llm = create_llm(config)
         logger.info(f"✓ Initialized {config.llm_provider} LLM: {self.llm.__class__.__name__}")
 
-        # Initialize coordinator
-        self.coordinator = MetaCoordinator(config, self.llm)
+        # Initialize coordinator with RAG support
+        self.coordinator = MetaCoordinator(config, self.llm, rag_service=rag_service)
 
         # Initialize executor
         self.agent_executor = AgentExecutor(

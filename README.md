@@ -101,7 +101,7 @@ UI_DISPLAY_LIMIT=200         # Max chars shown in UI per agent (default: 200)
 |-----------|------------|-------------|
 | **Orchestration** | LangGraph | DAG-based execution with state management, checkpointing, and crash recovery |
 | **MCP Gateway** | Docker + FastMCP | Model Context Protocol server for extensible tool integration |
-| **RAG Engine** | Qdrant/ChromaDB | Vector search over your documents with semantic retrieval |
+| **RAG Engine** | Qdrant/ChromaDB | Active retrieval: auto-injects relevant context into planning phase |
 | **Persistence** | SQLAlchemy + SQLite | Full conversation history, user profiles, and session management |
 | **State Management** | LangGraph State | Typed state with reducers, enabling complex multi-agent workflows |
 | **Real-time** | WebSocket | Live streaming of agent execution with token usage tracking |
@@ -109,14 +109,16 @@ UI_DISPLAY_LIMIT=200         # Max chars shown in UI per agent (default: 200)
 ### Execution Flow
 
 ```
-Query → Meta-Coordinator → Execution Plan → LangGraph DAG
-              ↓
+Query → RAG Context Injection → Meta-Coordinator → Execution Plan → LangGraph DAG
+                ↓
+Knowledge Base (auto-search) → Enriched Query
+                ↓
 Layer 0: [researcher_0, researcher_1] (parallel)
-              ↓ barrier
+                ↓ barrier
 Layer 1: [analyzer_2] (waits for layer 0)
-              ↓ barrier  
+                ↓ barrier  
 Layer 2: [synthesizer_3] (final answer)
-              ↓
+                ↓
 WebSocket Stream → React UI
 ```
 

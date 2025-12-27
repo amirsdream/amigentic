@@ -95,13 +95,37 @@ Add custom MCP servers in `docker/mcp-gateway/config.json`.
 
 ## RAG System
 
-Retrieval-Augmented Generation with vector stores:
+Retrieval-Augmented Generation with **active** knowledge injection:
+
+### Active RAG (Automatic)
+
+When RAG is enabled, the system automatically injects relevant context into the planning phase:
+
+```
+User Query → RAGService.get_relevant_context_for_planning() → Enriched Query
+                              ↓
+                   Knowledge Base Search (top 3 docs, min 0.5 score)
+                              ↓
+                   MetaCoordinator receives enriched context
+                              ↓
+                   Better informed agent planning
+```
+
+**Active RAG Features:**
+- Auto-searches knowledge base on every query
+- Injects relevant context before planning (not just execution)
+- Configurable relevance threshold (default: 0.5)
+- Coordinator makes better decisions with domain context
+
+### Passive RAG (Tool-based)
+
+Agents can also explicitly search via `search_knowledge_base` tool during execution.
+
+### Vector Stores
 
 - **Qdrant**: Production-ready, supports memory or server mode
 - **ChromaDB**: Lightweight alternative for local development
 - **Embeddings**: Ollama (local), OpenAI, or Voyage AI
-
-Agents automatically use `search_knowledge_base` tool when RAG is enabled.
 
 ## Persistence Layer
 

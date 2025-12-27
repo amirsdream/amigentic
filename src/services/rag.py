@@ -459,3 +459,62 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
             return {"error": str(e)}
+
+    def get_relevant_context_for_planning(
+        self, query: str, k: int = 3, min_score: float = 0.5
+    ) -> Optional[str]:
+        """Get relevant context for planning phase (active RAG).
+
+        This method is used to auto-inject relevant knowledge base context
+        into the planning phase, enriching the coordinator's decision making.
+
+        Args:
+            query: User's query
+            k: Number of documents to retrieve
+            min_score: Minimum relevance score (0-1, higher = more relevant)
+
+        Returns:
+            Formatted context string if relevant docs found, None otherwise
+        """
+        try:
+            if not self.vectorstore:
+                return None
+
+            results = self.search(query, k=k, score_threshold=min_score)
+
+            if not results:
+                logger.debug(f"No relevant RAG context found for: {query[:50]}...")
+                return None
+
+            # Format for planning context
+            context_parts = ["=== Relevant Knowledge Base Context ==="]
+            for i, (doc, score) in enumerate(results, 1):
+                source = doc.metadata.get("source", "knowledge_base")
+                # Truncate long documents for planning context
+                content = doc.page_content[:500]
+                if len(doc.page_content) > 500:
+                    content += "..."
+                context_parts.append(f"\n[{i}] ({source}, relevance: {score:.2f}):\n{content}")
+
+            context = "\n".join(context_parts)
+            logger.info(f"✓ Injecting {len(results)} RAG documents into planning context")
+            return context
+
+        except Exception as e:
+            logger.error(f"Error getting RAG context for planning: {e}")
+            return None
+
+    def enrich_query_with_context(self, query: str, k: int = 3) -> str:
+        """Enrich a query with relevant RAG context.
+
+        Args:
+            query: Original user query
+            k: Number of documents to retrieve
+
+        Returns:
+            Query enriched with relevant context, or original query if no context found
+        """
+        context = self.get_relevant_context_for_planning(query, k=k)
+        if context:
+            return f"{context}\n\n=== User Query ===\n{query}"
+        return query
